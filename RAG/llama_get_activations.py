@@ -18,6 +18,10 @@ import llama
 import pickle
 import argparse
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
+<<<<<<< HEAD
+=======
+import os
+>>>>>>> 5b5d3294d746ca636943dff95ef64c6ae3713edc
 
 HF_NAMES = {
     # 'llama_7B': 'baffo32/decapoda-research-llama-7B-hf',
@@ -47,7 +51,13 @@ def main():
 # =====================
 # NQ (RAG) 数据集支持
 # =====================
+<<<<<<< HEAD
     parser.add_argument('--nq_jsonl', type=str, default='./new_dataset.jsonl', help='NQ 格式数据集路径（当 dataset_name=nq 时生效）')
+=======
+    # 默认路径定位到当前脚本同目录下的 new_dataset.jsonl
+    default_nq_path = os.path.join(os.path.dirname(__file__), 'new_dataset.jsonl')
+    parser.add_argument('--nq_jsonl', type=str, default=default_nq_path, help='NQ 格式数据集路径（当 dataset_name=nq 时生效）')
+>>>>>>> 5b5d3294d746ca636943dff95ef64c6ae3713edc
     parser.add_argument('--nq_max_samples', type=int, default=None, help='NQ：仅处理指定数量的样本')
     parser.add_argument('--nq_max_docs', type=int, default=None, help='NQ：每条样本使用的检索片段数量上限')
     parser.add_argument('--use_chat_template', action='store_true', help='NQ：使用 tokenizer.apply_chat_template 构造系统+用户聊天输入')
@@ -63,7 +73,12 @@ def main():
     # model = AutoModelForCausalLM.from_pretrained(model_name_or_path, low_cpu_mem_usage=True, torch_dtype=torch.float16, device_map="auto")
     # tokenizer = llama.LlamaTokenizer.from_pretrained(model_name_or_path)
     model = llama.LlamaForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch.float16, device_map="auto")
+<<<<<<< HEAD
     device = "cuda"
+=======
+    # 更稳健的设备选择（与模型的 device_map 保持一致）
+    device = model.device
+>>>>>>> 5b5d3294d746ca636943dff95ef64c6ae3713edc
 
     if args.dataset_name == "tqa_mc2": 
         dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
