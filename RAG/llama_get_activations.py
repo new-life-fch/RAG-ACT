@@ -29,7 +29,7 @@ HF_NAMES = {
     'llama2_chat_13B': 'meta-llama/Llama-2-13b-chat-hf', 
     'llama2_chat_70B': 'meta-llama/Llama-2-70b-chat-hf', 
     'llama3_8B': 'meta-llama/Meta-Llama-3-8B',
-    'llama3_8B_instruct': 'meta-llama/Meta-Llama-3-8B-Instruct',
+    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct',
     'llama3_70B': 'meta-llama/Meta-Llama-3-70B',
     'llama3_70B_instruct': 'meta-llama/Meta-Llama-3-70B-Instruct'
 }
@@ -65,7 +65,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     # model = AutoModelForCausalLM.from_pretrained(model_name_or_path, low_cpu_mem_usage=True, torch_dtype=torch.float16, device_map="auto")
     # tokenizer = llama.LlamaTokenizer.from_pretrained(model_name_or_path)
-    model = llama.LlamaForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch.float16, device_map="auto")
+    model = llama.LlamaForCausalLM.from_pretrained(model_name_or_path, dtype=torch.float16, device_map="auto")
     # 更稳健的设备选择（与模型的 device_map 保持一致）
     device = model.device
 
@@ -110,10 +110,10 @@ def main():
             max_docs=args.nq_max_docs,
             use_chat_template=args.use_chat_template,
         )
-        os.makedirs('../features', exist_ok=True)
-        with open(f'../features/{args.model_name}_{args.dataset_name}_categories.pkl', 'wb') as f:
+        os.makedirs('../RAG-llm/features', exist_ok=True)
+        with open(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_categories.pkl', 'wb') as f:
             pickle.dump(categories, f)
-        with open(f'../features/{args.model_name}_{args.dataset_name}_tokens.pkl', 'wb') as f:
+        with open(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_tokens.pkl', 'wb') as f:
             pickle.dump(tokens, f)
     else:
         raise ValueError("Invalid dataset name")
@@ -131,13 +131,13 @@ def main():
         all_head_wise_activations.append(head_wise_activations[:,-1,:].copy())
 
     print("Saving labels")
-    np.save(f'../features/{args.model_name}_{args.dataset_name}_labels.npy', labels)
+    np.save(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_labels.npy', labels)
 
     print("Saving layer wise activations")
-    np.save(f'../features/{args.model_name}_{args.dataset_name}_layer_wise.npy', all_layer_wise_activations)
+    np.save(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_layer_wise.npy', all_layer_wise_activations)
     
     print("Saving head wise activations")
-    np.save(f'../features/{args.model_name}_{args.dataset_name}_head_wise.npy', all_head_wise_activations)
+    np.save(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_head_wise.npy', all_head_wise_activations)
 
 if __name__ == '__main__':
     main()

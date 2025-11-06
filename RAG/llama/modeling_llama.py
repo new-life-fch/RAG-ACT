@@ -49,6 +49,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from .configuration_llama import LlamaConfig
+from transformers import GenerationMixin
 
 
 if is_flash_attn_2_available():
@@ -300,7 +301,7 @@ class LlamaAttention(nn.Module):
                 base=self.rope_theta,
             )
         else:
-            scaling_type = self.config.rope_scaling["type"]
+            scaling_type = self.config.rope_scaling.get("type", self.config.rope_scaling.get("rope_type"))
             scaling_factor = self.config.rope_scaling["factor"]
             if scaling_type == "linear":
                 self.rotary_emb = LlamaLinearScalingRotaryEmbedding(
@@ -310,6 +311,14 @@ class LlamaAttention(nn.Module):
                     base=self.rope_theta,
                 )
             elif scaling_type == "dynamic":
+                self.rotary_emb = LlamaDynamicNTKScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=scaling_factor,
+                    base=self.rope_theta,
+                )
+            elif scaling_type == "llama3":
+                # For llama3 type, use the same as dynamic for now
                 self.rotary_emb = LlamaDynamicNTKScalingRotaryEmbedding(
                     self.head_dim,
                     max_position_embeddings=self.max_position_embeddings,
@@ -1131,7 +1140,7 @@ class LlamaModel(LlamaPreTrainedModel):
         return causal_mask
 
 
-class LlamaForCausalLM(LlamaPreTrainedModel):
+class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):

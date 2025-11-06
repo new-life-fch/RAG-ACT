@@ -26,7 +26,7 @@ except Exception as e:
 repo_id = "meta-llama/Llama-3.1-8B-Instruct"
 
 # 本地保存路径
-local_dir = "/root/autodl-tmp/RAG-llm/models/Llama-3.1-8B-Instruct"
+local_dir = "/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct"
 os.makedirs(local_dir, exist_ok=True)
 
 print(f"⬇️ 正在从官方 Hugging Face 下载模型 '{repo_id}' 到 '{local_dir}'...")

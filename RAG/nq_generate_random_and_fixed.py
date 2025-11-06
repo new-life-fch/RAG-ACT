@@ -1,9 +1,8 @@
 import os
-import sys
 import argparse
 import json
 import pickle
-from typing import List, Tuple, Any
+from typing import List, Tuple
 
 import torch
 import numpy as np
@@ -41,9 +40,6 @@ def build_nq_generation_inputs(
     返回：
     - inputs: 列表，元素为 `torch.Tensor` 的 `input_ids`
     - gold_answers_list: 列表，元素为正确答案字符串列表（用于 EM/F1）
-
-    初学者注释：生成阶段我们只给模型问题和检索到的文档信息，不提供答案，让模型自己生成；
-    之后我们将生成的答案与所有正确答案列表进行比对，计算 EM/F1。
     """
     entries = _load_nq_jsonl(jsonl_path, max_samples=max_samples)
 
@@ -92,25 +88,18 @@ def build_nq_generation_inputs(
         inputs.append(input_ids)
         gold_answers_list.append(list(answers))
 
-        if i == 0:
-            print(f"[Generation Chat Input Example]\nSYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}")
-
     return inputs, gold_answers_list
 
 
 def main():
     """
-    NQ 生成阶段脚本：
-    1) 加载模型与分词器；
-    2) 从 jsonl 构造系统+用户输入（不含答案）；
-    3) 加载并构造干预（基于已保存的探针与 top-k 头、验证准确率作为探针分数因子）；
-    4) 在生成时应用干预；
-    5) 评估 EM/F1（考虑全部正确答案列表），并保存结果。
+    NQ 生成阶段脚本（随机方向 & 固定强度）：
+    - 随机方向：在前48个头上添加随机方向（单位向量），强度按 proj_val_std 调制。
+    - 固定强度：使用探针方向但不使用探针分数因子（probe_factor=1.0）。
 
-    初学者注释：干预在注意力头的输出上加一个“方向向量”，让模型更倾向于生成正确答案；强度由三个因素共同决定：
-    - `alpha`（你的手动设置）、
-    - 沿该方向的激活标准差 `proj_val_std`（数据驱动的尺度）、
-    - 探针分数因子 `probe_factor`（验证准确率，越高说明该头在区分正/负上更可靠）。
+    两者均采用：
+    - 提示词使用chat模板（参照 utils/generate_dataset.py#L45-91）；
+    - 贪心解码（do_sample=False，max_new_tokens控制长度）。
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', type=str, default='llama2_chat_7B')
@@ -123,18 +112,15 @@ def main():
     parser.add_argument('--alpha', type=float, default=15.0, help='干预强度系数')
     parser.add_argument('--head_dim', type=int, default=128)
     parser.add_argument('--num_heads', type=int, default=None, help='若不传，将从特征维度推断')
-    # 已保存的探针与top-k头、验证准确率
-    parser.add_argument('--probes_path', type=str, required=True)
+    # 已保存的top-heads与探针（固定强度使用），随机方向也需要top-heads集合
     parser.add_argument('--top_heads_path', type=str, required=True)
-    parser.add_argument('--val_accs_path', type=str, required=True)
+    parser.add_argument('--probes_path', type=str, required=False, default=None)
     # 用于计算 proj_val_std 的激活（推荐使用 NQ 收集的激活）
     parser.add_argument('--tuning_headwise_path', type=str, default='../features/llama2_chat_7B_nq_head_wise.npy')
-    parser.add_argument('--tuning_labels_path', type=str, default='../features/llama2_chat_7B_nq_labels.npy')
-    # 输出路径（同时评估标准RAG与探针干预RAG）
-    parser.add_argument('--save_answers_baseline_path', type=str, default='./results_dump/answer_dump/nq_gen_answers_baseline.jsonl')
-    parser.add_argument('--save_summary_baseline_path', type=str, default='./results_dump/summary_dump/nq_gen_summary_baseline.json')
-    parser.add_argument('--save_answers_intervene_path', type=str, default='./results_dump/answer_dump/nq_gen_answers_intervene.jsonl')
-    parser.add_argument('--save_summary_intervene_path', type=str, default='./results_dump/summary_dump/nq_gen_summary_intervene.json')
+    parser.add_argument('--save_answers_random_path', type=str, default='./results_dump/answer_dump/nq_gen_answers_random_dir.jsonl')
+    parser.add_argument('--save_summary_random_path', type=str, default='./results_dump/summary_dump/nq_gen_summary_random_dir.json')
+    parser.add_argument('--save_answers_fixed_path', type=str, default='./results_dump/answer_dump/nq_gen_answers_fixed_strength.jsonl')
+    parser.add_argument('--save_summary_fixed_path', type=str, default='./results_dump/summary_dump/nq_gen_summary_fixed_strength.json')
     parser.add_argument('--max_new_tokens', type=int, default=256, help='生成最大新token数（贪心解码）')
     args = parser.parse_args()
 
@@ -143,7 +129,6 @@ def main():
         raise ValueError(f"不支持的模型名: {args.model_name}")
 
     # 加载分词器与模型
-    # Llama 3 使用 HF 的 AutoTokenizer 更稳妥（支持 chat_template 与 fast 版）
     tokenizer = AutoTokenizer.from_pretrained(MODEL, use_fast=True)
     dtype = torch.bfloat16 if 'llama3' in args.model_name else torch.float16
     model = llama.LlamaForCausalLM.from_pretrained(MODEL, low_cpu_mem_usage=True, torch_dtype=dtype, device_map='auto')
@@ -163,12 +148,9 @@ def main():
         sample_seed=args.sample_seed,
     )
 
-    # 加载 top-k 探针与验证准确率（作为探针分数因子）
-    with open(args.probes_path, 'rb') as f:
-        probes = pickle.load(f)
+    # 加载 top-heads
     with open(args.top_heads_path, 'rb') as f:
         top_heads = pickle.load(f)  # List[Tuple[layer, head]]
-    val_accs = np.load(args.val_accs_path)  # shape (L, H)
 
     # 加载用于计算 proj_val_std 的 head-wise 激活，并 reshape 为 (B, L, H, D)
     tuning_headwise = np.load(args.tuning_headwise_path)  # (B, L, H*D)
@@ -181,39 +163,34 @@ def main():
         num_heads = args.num_heads
     tuning_headwise = rearrange(tuning_headwise, 'b l (h d) -> b l h d', h=num_heads, d=args.head_dim)
 
-    # 构造干预字典（包含探针分数因子）
-    probe_score_map = val_accs  # (L, H)
-    interventions = get_interventions_dict(
-        top_heads,
-        probes,
-        tuning_headwise,
-        num_heads,
-        use_center_of_mass=False,
-        use_random_dir=False,
-        com_directions=None,
-        probe_score_map=probe_score_map,
-    )
+    # 若固定强度使用探针方向，需要加载 probes
+    probes = None
+    if args.probes_path is not None:
+        with open(args.probes_path, 'rb') as f:
+            probes = pickle.load(f)
 
-    # 干预函数：在最后一个 token 的 head 输出上加方向
-    def lt_modulated_vector_add(head_output, layer_name, start_edit_location='lt'):
-        head_output = rearrange(head_output, 'b s (h d) -> b s h d', h=num_heads)
-        for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
-            direction_to_add = torch.tensor(direction).to(head_output.device)
-            if start_edit_location == 'lt':
-                head_output[:, -1, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-            else:
-                head_output[:, start_edit_location:, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-        head_output = rearrange(head_output, 'b s h d -> b s (h d)')
-        return head_output
+    # 构造干预函数
+    def make_lt_add(interventions):
+        def lt_modulated_vector_add(head_output, layer_name, start_edit_location='lt'):
+            ho = rearrange(head_output, 'b s (h d) -> b s h d', h=num_heads)
+            for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
+                direction_to_add = torch.tensor(direction).to(ho.device)
+                if start_edit_location == 'lt':
+                    ho[:, -1, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
+                else:
+                    ho[:, start_edit_location:, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
+            ho = rearrange(ho, 'b s h d -> b s (h d)')
+            return ho
+        return lt_modulated_vector_add
 
-    # 逐条生成并评估（标准RAG 与 探针干预RAG）
-    os.makedirs(os.path.dirname(args.save_answers_baseline_path), exist_ok=True)
-    os.makedirs(os.path.dirname(args.save_summary_baseline_path), exist_ok=True)
-    os.makedirs(os.path.dirname(args.save_answers_intervene_path), exist_ok=True)
-    os.makedirs(os.path.dirname(args.save_summary_intervene_path), exist_ok=True)
+    # 评估：随机方向 & 固定强度
+    os.makedirs(os.path.dirname(args.save_answers_random_path), exist_ok=True)
+    os.makedirs(os.path.dirname(args.save_summary_random_path), exist_ok=True)
+    os.makedirs(os.path.dirname(args.save_answers_fixed_path), exist_ok=True)
+    os.makedirs(os.path.dirname(args.save_summary_fixed_path), exist_ok=True)
 
-    preds_baseline = []
-    preds_intervene = []
+    preds_random = []
+    preds_fixed = []
 
     def _clean_answer_text(gen_str: str) -> str:
         s = gen_str.strip()
@@ -226,57 +203,87 @@ def main():
                 pass
         return s
 
+    # 干预字典：随机方向（probe_factor固定为1.0）
+    interventions_random = get_interventions_dict(
+        top_heads,
+        probes,  # 未使用
+        tuning_headwise,
+        num_heads,
+        use_center_of_mass=False,
+        use_random_dir=True,
+        com_directions=None,
+        probe_score_map=None,
+    )
+    lt_add_random = make_lt_add(interventions_random)
+
+    # 干预字典：固定强度（探针方向，无探针分数因子）
+    if probes is None:
+        raise ValueError('固定强度需要提供 --probes_path 以加载探针方向')
+    interventions_fixed = get_interventions_dict(
+        top_heads,
+        probes,
+        tuning_headwise,
+        num_heads,
+        use_center_of_mass=False,
+        use_random_dir=False,
+        com_directions=None,
+        probe_score_map=None,  # 禁用探针分数因子
+    )
+    lt_add_fixed = make_lt_add(interventions_fixed)
+
     with torch.no_grad():
-        for input_ids, golds in tqdm(zip(inputs, gold_answers_list), total=len(inputs), desc='nq_generate'):
+        for input_ids, golds in tqdm(zip(inputs, gold_answers_list), total=len(inputs), desc='nq_generate_random_fixed'):
             input_ids = input_ids.to(device)
 
-            # 标准RAG（无干预，贪心解码）
-            gen_tokens_base = model.generate(
-                input_ids,
-                do_sample=False,
-                max_new_tokens=args.max_new_tokens,
-                num_return_sequences=1,
-                pad_token_id=tokenizer.pad_token_id,
-            )[:, input_ids.shape[-1]:]
-            gen_str_base = tokenizer.decode(gen_tokens_base[0], skip_special_tokens=True)
-            preds_baseline.append(_clean_answer_text(gen_str_base))
-
-            # 探针干预RAG（前48头，带探针分数因子）
-            layers_to_intervene = list(interventions.keys())
-            with TraceDict(model, layers_to_intervene, edit_output=lt_modulated_vector_add):
-                gen_tokens_itv = model.generate(
+            # 随机方向（贪心解码）
+            layers_to_intervene = list(interventions_random.keys())
+            with TraceDict(model, layers_to_intervene, edit_output=lt_add_random):
+                gen_tokens_rand = model.generate(
                     input_ids,
                     do_sample=False,
                     max_new_tokens=args.max_new_tokens,
                     num_return_sequences=1,
                     pad_token_id=tokenizer.pad_token_id,
                 )[:, input_ids.shape[-1]:]
-            gen_str_itv = tokenizer.decode(gen_tokens_itv[0], skip_special_tokens=True)
-            preds_intervene.append(_clean_answer_text(gen_str_itv))
+            gen_str_rand = tokenizer.decode(gen_tokens_rand[0], skip_special_tokens=True)
+            preds_random.append(_clean_answer_text(gen_str_rand))
+
+            # 固定强度（贪心解码）
+            layers_to_intervene = list(interventions_fixed.keys())
+            with TraceDict(model, layers_to_intervene, edit_output=lt_add_fixed):
+                gen_tokens_fix = model.generate(
+                    input_ids,
+                    do_sample=False,
+                    max_new_tokens=args.max_new_tokens,
+                    num_return_sequences=1,
+                    pad_token_id=tokenizer.pad_token_id,
+                )[:, input_ids.shape[-1]:]
+            gen_str_fix = tokenizer.decode(gen_tokens_fix[0], skip_special_tokens=True)
+            preds_fixed.append(_clean_answer_text(gen_str_fix))
 
     # 保存逐条预测
-    with open(args.save_answers_baseline_path, 'w', encoding='utf-8') as f:
-        for pred, golds in zip(preds_baseline, gold_answers_list):
+    with open(args.save_answers_random_path, 'w', encoding='utf-8') as f:
+        for pred, golds in zip(preds_random, gold_answers_list):
             item = {"prediction": pred, "gold_answers": golds}
             f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    with open(args.save_answers_intervene_path, 'w', encoding='utf-8') as f:
-        for pred, golds in zip(preds_intervene, gold_answers_list):
+    with open(args.save_answers_fixed_path, 'w', encoding='utf-8') as f:
+        for pred, golds in zip(preds_fixed, gold_answers_list):
             item = {"prediction": pred, "gold_answers": golds}
             f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
     # 计算并保存 EM/F1
-    em_b, f1_b = evaluate_nq_em_f1(preds_baseline, gold_answers_list)
-    summary_b = {"EM": em_b, "F1": f1_b, "alpha": 0.0, "model_name": args.model_name, "intervention": "none"}
-    with open(args.save_summary_baseline_path, 'w', encoding='utf-8') as f:
-        json.dump(summary_b, f, ensure_ascii=False, indent=2)
+    em_r, f1_r = evaluate_nq_em_f1(preds_random, gold_answers_list)
+    summary_r = {"EM": em_r, "F1": f1_r, "alpha": args.alpha, "model_name": args.model_name, "intervention": "random_dir_top48"}
+    with open(args.save_summary_random_path, 'w', encoding='utf-8') as f:
+        json.dump(summary_r, f, ensure_ascii=False, indent=2)
 
-    em_i, f1_i = evaluate_nq_em_f1(preds_intervene, gold_answers_list)
-    summary_i = {"EM": em_i, "F1": f1_i, "alpha": args.alpha, "model_name": args.model_name, "intervention": "probe_top48_with_factor"}
-    with open(args.save_summary_intervene_path, 'w', encoding='utf-8') as f:
-        json.dump(summary_i, f, ensure_ascii=False, indent=2)
+    em_f, f1_f = evaluate_nq_em_f1(preds_fixed, gold_answers_list)
+    summary_f = {"EM": em_f, "F1": f1_f, "alpha": args.alpha, "model_name": args.model_name, "intervention": "probe_top48_fixed_strength"}
+    with open(args.save_summary_fixed_path, 'w', encoding='utf-8') as f:
+        json.dump(summary_f, f, ensure_ascii=False, indent=2)
 
-    print("Baseline Summary:", summary_b)
-    print("Intervention Summary:", summary_i)
+    print("Random Direction Summary:", summary_r)
+    print("Fixed Strength Summary:", summary_f)
 
 
 if __name__ == '__main__':

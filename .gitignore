@@ -1,2 +1,6 @@
 .env
 models/
+truthfulqa/
+TruthfulQA/
+features/
+results_dump/

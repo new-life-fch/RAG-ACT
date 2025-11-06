@@ -1,0 +1,73 @@
+{
+    // 使用 IntelliSense 了解相关属性。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Debug: llama_get_activations (NQ)",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/RAG/llama_get_activations.py",
+            "args": [
+                "--model_name", "llama3_8B_instruct",
+                "--dataset_name", "nq",
+                "--nq_jsonl", "RAG/new_dataset.jsonl",
+                "--use_chat_template"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "TRANSFORMERS_VERBOSITY": "info",
+                "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:256"
+            }
+        },
+        {
+            "name": "Debug: llama_get_activations (NQ, 2x3090)",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/RAG/llama_get_activations.py",
+            "args": [
+                "--model_name", "llama3_8B_instruct",
+                "--dataset_name", "nq",
+                "--nq_jsonl", "RAG/new_dataset.jsonl",
+                "--use_chat_template"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0,1",
+                "TRANSFORMERS_VERBOSITY": "info",
+                "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:256"
+            }
+        },
+        {
+            "name": "Debug: nq_train_save_probes (NQ, 5-fold)",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/RAG/nq_train_save_probes.py",
+            "args": [
+                "--model_name", "llama3_8B_instruct",
+                "--top_k", "48",
+                "--seed", "2025",
+                "--num_fold", "5"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0,1",
+                "TRANSFORMERS_VERBOSITY": "info"
+            }
+        }
+    ]
+}

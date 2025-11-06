@@ -25,8 +25,10 @@ from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
 
-
-from transformers.models.deprecated._archive_maps import LLAMA_PRETRAINED_CONFIG_ARCHIVE_MAP  # noqa: F401, E402
+try:
+    from transformers.models.deprecated._archive_maps import LLAMA_PRETRAINED_CONFIG_ARCHIVE_MAP  # noqa: F401, E402
+except Exception:
+    LLAMA_PRETRAINED_CONFIG_ARCHIVE_MAP = {}
 
 
 class LlamaConfig(PretrainedConfig):
@@ -177,15 +179,40 @@ class LlamaConfig(PretrainedConfig):
         if self.rope_scaling is None:
             return
 
-        if not isinstance(self.rope_scaling, dict) or len(self.rope_scaling) != 2:
+        if not isinstance(self.rope_scaling, dict):
             raise ValueError(
-                "`rope_scaling` must be a dictionary with two fields, `type` and `factor`, " f"got {self.rope_scaling}"
+                "`rope_scaling` must be a dictionary, " f"got {self.rope_scaling}"
             )
-        rope_scaling_type = self.rope_scaling.get("type", None)
+        
+        rope_scaling_type = self.rope_scaling.get("type", self.rope_scaling.get("rope_type", None))
         rope_scaling_factor = self.rope_scaling.get("factor", None)
-        if rope_scaling_type is None or rope_scaling_type not in ["linear", "dynamic"]:
+        
+        # Support for Llama3 rope_scaling format
+        if rope_scaling_type == "llama3":
+            # For llama3 type, we have additional fields but still need factor
+            if rope_scaling_factor is None or not isinstance(rope_scaling_factor, float) or rope_scaling_factor <= 1.0:
+                raise ValueError(f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}")
+            # Check for required llama3 fields
+            if "original_max_position_embeddings" not in self.rope_scaling:
+                raise ValueError("`rope_scaling` for llama3 type must contain 'original_max_position_embeddings' field")
+            # Check for other optional llama3 fields
+            if "low_freq_factor" not in self.rope_scaling:
+                self.rope_scaling["low_freq_factor"] = 1.0
+            if "high_freq_factor" not in self.rope_scaling:
+                self.rope_scaling["high_freq_factor"] = 4.0
+        elif rope_scaling_type in ["linear", "dynamic"]:
+            # Original validation for linear and dynamic types
+            if len(self.rope_scaling) != 2:
+                raise ValueError(
+                    "`rope_scaling` must be a dictionary with two fields, `type` and `factor`, " f"got {self.rope_scaling}"
+                )
+            if rope_scaling_type is None or rope_scaling_type not in ["linear", "dynamic"]:
+                raise ValueError(
+                    f"`rope_scaling`'s type field must be one of ['linear', 'dynamic'], got {rope_scaling_type}"
+                )
+            if rope_scaling_factor is None or not isinstance(rope_scaling_factor, float) or rope_scaling_factor <= 1.0:
+                raise ValueError(f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}")
+        else:
             raise ValueError(
-                f"`rope_scaling`'s type field must be one of ['linear', 'dynamic'], got {rope_scaling_type}"
+                f"`rope_scaling`'s type field must be one of ['linear', 'dynamic', 'llama3'], got {rope_scaling_type}"
             )
-        if rope_scaling_factor is None or not isinstance(rope_scaling_factor, float) or rope_scaling_factor <= 1.0:
-            raise ValueError(f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}")

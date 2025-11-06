@@ -24,9 +24,9 @@ from functools import partial
 import json
 from typing import List, Tuple, Any
 
-from truthfulqa import utilities, models, metrics
-import openai
-from truthfulqa.configs import BEST_COL, ANSWER_COL, INCORRECT_COL
+# from truthfulqa import utilities, models, metrics
+# import openai
+# from truthfulqa.configs import BEST_COL, ANSWER_COL, INCORRECT_COL
 
 ENGINE_MAP = {
     # 'llama_7B': 'baffo32/decapoda-research-llama-7B-hf',
@@ -42,16 +42,16 @@ ENGINE_MAP = {
     'llama3_70B_instruct': 'meta-llama/Meta-Llama-3-70B-Instruct',
 }
 
-from truthfulqa.utilities import (
-    format_prompt,
-    format_prompt_with_answer_strings,
-    split_multi_answer,
-    format_best,
-    find_start,
-)
-from truthfulqa.presets import preset_map, COMPARE_PRIMER
-from truthfulqa.models import find_subsequence, set_columns, MC_calcs
-from truthfulqa.evaluate import format_frame, data_to_dict
+# from truthfulqa.utilities import (
+#     format_prompt,
+#     format_prompt_with_answer_strings,
+#     split_multi_answer,
+#     format_best,
+#     find_start,
+# )
+# from truthfulqa.presets import preset_map, COMPARE_PRIMER
+# from truthfulqa.models import find_subsequence, set_columns, MC_calcs
+# from truthfulqa.evaluate import format_frame, data_to_dict
 
 
 def load_nq():

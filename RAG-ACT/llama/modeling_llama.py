@@ -49,6 +49,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from .configuration_llama import LlamaConfig
+from transformers import GenerationMixin
 
 
 if is_flash_attn_2_available():
@@ -1131,7 +1132,7 @@ class LlamaModel(LlamaPreTrainedModel):
         return causal_mask
 
 
-class LlamaForCausalLM(LlamaPreTrainedModel):
+class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):

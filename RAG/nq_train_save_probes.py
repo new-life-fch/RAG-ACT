@@ -20,9 +20,9 @@ def main():
     训练并筛选前 top-k 个探针，并保存到磁盘，便于后续实验复用。
 
     使用从 NQ 数据集生成的特征：
-    - `../features/{model_name}_nq_labels.npy`
-    - `../features/{model_name}_nq_head_wise.npy`
-    - `../features/{model_name}_nq_tokens.pkl`（可选，分析定位用）
+    - `../RAG-llm/features/{model_name}_nq_labels.npy`
+    - `../RAG-llm/features/{model_name}_nq_head_wise.npy`
+    - `../RAG-llm/features/{model_name}_nq_tokens.pkl`（可选，分析定位用）
 
     处理流程：
     1. 加载 head-wise 激活并 reshape 为 `(B, L, H, D)`；
@@ -42,12 +42,19 @@ def main():
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
     parser.add_argument('--val_ratio', type=float, default=0.2, help='验证集比例')
     parser.add_argument('--num_fold', type=int, default=2, help='可选：K折交叉验证的折数，>1时启用；=1时仅随机划分')
+    parser.add_argument(
+        '--cv_final_train',
+        type=str,
+        default='full',
+        choices=['none', 'full'],
+        help='当 --num_fold>1 时，是否在折均值后用全数据重训探针并保存：full=用全数据重训（推荐），none=保存第一折的探针（原行为）'
+    )
     args = parser.parse_args()
 
     np.random.seed(args.seed)
 
     # 路径准备
-    feat_dir = '../features'
+    feat_dir = '../RAG-llm/features'
     labels_path = os.path.join(feat_dir, f'{args.model_name}_nq_labels.npy')
     head_path = os.path.join(feat_dir, f'{args.model_name}_nq_head_wise.npy')
 
@@ -96,8 +103,28 @@ def main():
         scores = accs_mean.reshape(L * num_heads)
         top_flat = np.argsort(scores)[::-1][:args.top_k]
         top_heads = [flattened_idx_to_layer_head(idx, num_heads) for idx in top_flat]
-        probes_to_save = probes_all
         accs_to_save = accs_mean.reshape(L, num_heads)
+
+        # 交叉验证后最终保存的探针：
+        # - full：用“全问题样本”重训所有头的探针，保证与折均分数的选择逻辑一致（推荐）
+        # - none：保留第一折训练的探针（原行为）
+        if args.cv_final_train == 'full':
+            all_q_idxs = np.arange(num_questions)
+            # 复用 train_probes：val 同样取全数据以便函数内部计算不报错；返回的 accs 不用于最终保存
+            final_probes, _ = train_probes(
+                args.seed,
+                all_q_idxs,
+                all_q_idxs,
+                separated_head,
+                separated_labels,
+                num_layers=L,
+                num_heads=num_heads,
+            )
+            probes_to_save = final_probes
+            print('[Info] CV 后使用全数据重训并保存探针（cv_final_train=full）')
+        else:
+            probes_to_save = probes_all
+            print('[Info] CV 后保留第一折训练的探针（cv_final_train=none）')
     else:
         # 单次随机划分
         q_idxs = np.arange(num_questions)

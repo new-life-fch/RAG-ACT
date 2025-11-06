@@ -285,8 +285,8 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
 # --- 主程序 ---
 if __name__ == "__main__":
     # 新功能：生成新数据集
-    input_file = '/root/autodl-tmp/RAG-llm/RAG-ACT/data/train.jsonl'
-    output_file = '/root/autodl-tmp/RAG-llm/RAG-ACT/data/new_dataset.jsonl'
+    input_file = '/root/shared-nvme/RAG-llm/RAG/data/train.jsonl'
+    output_file = '/root/shared-nvme/RAG-llm/RAG/new_dataset.jsonl'
     
     # 先用10条数据进行测试
     generate_new_dataset(input_file, output_file, num_samples=3000, random_seed=2025)
