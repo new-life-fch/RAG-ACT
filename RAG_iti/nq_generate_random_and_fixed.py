@@ -10,7 +10,8 @@ from tqdm import tqdm
 from einops import rearrange
 
 import llama
-from baukit import TraceDict
+from interveners import wrapper, ITI_Intervener
+import pyvene as pv
 from llama_utils import (
     _load_nq_jsonl,
     _build_messages_input,
@@ -168,19 +169,27 @@ def main():
         with open(args.probes_path, 'rb') as f:
             probes = pickle.load(f)
 
-    # 构造干预函数
-    def make_lt_add(interventions):
-        def lt_modulated_vector_add(head_output, layer_name, start_edit_location='lt'):
-            ho = rearrange(head_output, 'b s (h d) -> b s h d', h=num_heads)
-            for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
-                direction_to_add = torch.tensor(direction).to(ho.device)
-                if start_edit_location == 'lt':
-                    ho[:, -1, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-                else:
-                    ho[:, start_edit_location:, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-            ho = rearrange(ho, 'b s h d -> b s (h d)')
-            return ho
-        return lt_modulated_vector_add
+    # 构造 pyvene IntervenableModel 生成器（随机方向 / 固定强度）
+    def make_intervened_model(interventions):
+        top_heads_by_layer = {}
+        for layer_name, items in interventions.items():
+            layer = int(layer_name.split('.')[2])
+            top_heads_by_layer.setdefault(layer, [])
+            for head, direction, proj_val_std, probe_factor in items:
+                top_heads_by_layer[layer].append((head, direction, proj_val_std, probe_factor))
+        pv_config = []
+        for layer, info_list in top_heads_by_layer.items():
+            direction_vec = torch.zeros(num_heads * args.head_dim, dtype=torch.float32)
+            for head, direction, proj_val_std, probe_factor in info_list:
+                dir = torch.tensor(direction, dtype=torch.float32)
+                scaled = dir * (proj_val_std * float(probe_factor) * float(args.alpha))
+                direction_vec[head * args.head_dim: (head + 1) * args.head_dim] = scaled
+            intervener = ITI_Intervener(direction_vec, multiplier=1.0)
+            pv_config.append({
+                "component": f"model.layers[{layer}].self_attn.o_proj.input",
+                "intervention": wrapper(intervener),
+            })
+        return pv.IntervenableModel(pv_config, model)
 
     # 评估：随机方向 & 固定强度
     os.makedirs(os.path.dirname(args.save_answers_random_path), exist_ok=True)
@@ -213,7 +222,7 @@ def main():
         com_directions=None,
         probe_score_map=None,
     )
-    lt_add_random = make_lt_add(interventions_random)
+    model_random = make_intervened_model(interventions_random)
 
     # 干预字典：固定强度（探针方向，无探针分数因子）
     if probes is None:
@@ -228,35 +237,33 @@ def main():
         com_directions=None,
         probe_score_map=None,  # 禁用探针分数因子
     )
-    lt_add_fixed = make_lt_add(interventions_fixed)
+    model_fixed = make_intervened_model(interventions_fixed)
 
     with torch.no_grad():
         for input_ids, golds in tqdm(zip(inputs, gold_answers_list), total=len(inputs), desc='nq_generate_random_fixed'):
             input_ids = input_ids.to(device)
 
-            # 随机方向（贪心解码）
-            layers_to_intervene = list(interventions_random.keys())
-            with TraceDict(model, layers_to_intervene, edit_output=lt_add_random):
-                gen_tokens_rand = model.generate(
-                    input_ids,
-                    do_sample=False,
-                    max_new_tokens=args.max_new_tokens,
-                    num_return_sequences=1,
-                    pad_token_id=tokenizer.pad_token_id,
-                )[:, input_ids.shape[-1]:]
+            # 随机方向（贪心解码，pyvene）
+            _, gen_tokens_rand = model_random.generate(
+                input_ids,
+                do_sample=False,
+                max_new_tokens=args.max_new_tokens,
+                num_return_sequences=1,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            gen_tokens_rand = gen_tokens_rand[:, input_ids.shape[-1]:]
             gen_str_rand = tokenizer.decode(gen_tokens_rand[0], skip_special_tokens=True)
             preds_random.append(_clean_answer_text(gen_str_rand))
 
-            # 固定强度（贪心解码）
-            layers_to_intervene = list(interventions_fixed.keys())
-            with TraceDict(model, layers_to_intervene, edit_output=lt_add_fixed):
-                gen_tokens_fix = model.generate(
-                    input_ids,
-                    do_sample=False,
-                    max_new_tokens=args.max_new_tokens,
-                    num_return_sequences=1,
-                    pad_token_id=tokenizer.pad_token_id,
-                )[:, input_ids.shape[-1]:]
+            # 固定强度（贪心解码，pyvene）
+            _, gen_tokens_fix = model_fixed.generate(
+                input_ids,
+                do_sample=False,
+                max_new_tokens=args.max_new_tokens,
+                num_return_sequences=1,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            gen_tokens_fix = gen_tokens_fix[:, input_ids.shape[-1]:]
             gen_str_fix = tokenizer.decode(gen_tokens_fix[0], skip_special_tokens=True)
             preds_fixed.append(_clean_answer_text(gen_str_fix))
 

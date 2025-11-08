@@ -5,7 +5,7 @@
 
 **数据与模型**
 - 训练集：`RAG/data/train.jsonl`；测试集：`RAG/data/test.jsonl`。
-- 模型：`llama3_8B`（映射到本地 `Llama-3.1-8B-Instruct`）。
+- 模型：`llama3_8B_instruct`（映射到本地 `Llama-3.1-8B-Instruct`）。
 - 每行字段：`query`、`answers`（列表）、`wrong_answer`、`retrieve_snippets`（含 `text`）。
 
 **依赖**
@@ -13,14 +13,14 @@
 
 **工作流程**
 - 收集训练集激活（用于调强度）：
-  - `python RAG/llama_get_activations.py --model_name llama3_8B --dataset_name nq --nq_jsonl RAG/data/train.jsonl --use_chat_template`
+  - `python RAG/llama_get_activations.py --model_name llama3_8B_instruct --dataset_name nq --nq_jsonl RAG/data/train.jsonl --use_chat_template`
 - 训练并保存探针与前48个头：
-  - `python RAG/nq_train_save_probes.py --model_name llama3_8B --top_k 48 --seed 2025 --num_fold 5 --cv_final_train full`
+  - `python RAG/nq_train_save_probes.py --model_name llama3_8B_instruct --top_k 48 --seed 2025 --num_fold 5 --cv_final_train full`
 - 在测试集评估四种设置（均使用 chat 模板与贪心解码）：
   - 标准RAG + 探针干预RAG（含探针分数因子）：
-    - `python RAG/nq_generate_with_interventions.py --model_name llama3_8B --dataset_path RAG/data/test.jsonl --use_chat_template --alpha 15 --top_heads_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_top_heads.pkl --probes_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_probes.pkl --val_accs_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_val_accs.npy --tuning_headwise_path features/llama3_8B_instruct_nq_head_wise.npy --sample_size 300 --sample_seed 2025 --max_new_tokens 256`
+    - `python RAG/nq_generate_with_interventions.py --model_name llama3_8B_instruct --dataset_path RAG/data/test.jsonl --use_chat_template --alpha 15 --top_heads_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_top_heads.pkl --probes_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_probes.pkl --val_accs_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_val_accs.npy --tuning_headwise_path features/llama3_8B_instruct_nq_head_wise.npy --sample_size 300 --sample_seed 2025 --max_new_tokens 256`
   - 随机方向（前48头） + 固定强度（前48头，无探针分数因子）：
-    - `python RAG/nq_generate_random_and_fixed.py --model_name llama3_8B --dataset_path RAG/data/test.jsonl --use_chat_template --alpha 15 --top_heads_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_top_heads.pkl --probes_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_probes.pkl --tuning_headwise_path features/llama3_8B_instruct_nq_head_wise.npy --sample_size 300 --sample_seed 2025 --max_new_tokens 256`
+    - `python RAG/nq_generate_random_and_fixed.py --model_name llama3_8B_instruct --dataset_path RAG/data/test.jsonl --use_chat_template --alpha 15 --top_heads_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_top_heads.pkl --probes_path results_dump/probes/llama3_8B_instruct_nq_seed_2025_top_48_folds_5_probes.pkl --tuning_headwise_path features/llama3_8B_instruct_nq_head_wise.npy --sample_size 300 --sample_seed 2025 --max_new_tokens 256`
 
 **输出文件**
 - 标准RAG：`results_dump/answer_dump/nq_gen_answers_baseline.jsonl`、`results_dump/summary_dump/nq_gen_summary_baseline.json`。

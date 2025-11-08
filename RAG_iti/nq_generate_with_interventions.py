@@ -11,7 +11,8 @@ from tqdm import tqdm
 from einops import rearrange
 
 import llama
-from baukit import TraceDict
+from interveners import wrapper, ITI_Intervener
+import pyvene as pv
 from llama_utils import (
     _load_nq_jsonl,
     _build_messages_input,
@@ -21,7 +22,7 @@ from llama_utils import (
 
 
 HF_NAMES = {
-    'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
+    'llama2_chat_7B': 'meta-llama/Llama-2-7b-chat-hf',
     'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct',
 }
 
@@ -80,17 +81,10 @@ def build_nq_generation_inputs(
             "Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context. "
             "Just give the key information that directly answers the question.\n\n"
             "Example:\n"
-            "Question: when does nathan make it to the nba\n"
-            "Answer: season 6 finale\n\n"
+            "Question: Where do the Great Lakes meet the ocean?\n"
+            "Answer: the Saint Lawrence River\n\n"
             f"The following are given documents.\n\n{docs_block}"
         )
-
-        # system_prompt = (
-        #     "Answer the question based on the given document. "
-        #     "Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context. "
-        #     "Just give the key information that directly answers the question.\n\n"
-        #     f"The following are given documents.\n\n{docs_block}"
-        # )
         user_prompt = f"Question: {question}\nAnswer:"
 
         # 注意：生成阶段不提供助手答案
@@ -137,10 +131,10 @@ def main():
     parser.add_argument('--tuning_headwise_path', type=str, default='../features/llama2_chat_7B_nq_head_wise.npy')
     parser.add_argument('--tuning_labels_path', type=str, default='../features/llama2_chat_7B_nq_labels.npy')
     # 输出路径（同时评估标准RAG与探针干预RAG）
-    parser.add_argument('--save_answers_baseline_path', type=str, default='./results_dump/llama-2-7b-instruct/answer_dump/nq_gen_answers_baseline.jsonl')
-    parser.add_argument('--save_summary_baseline_path', type=str, default='./results_dump/llama-2-7b-instruct/summary_dump/nq_gen_summary_baseline.json')
-    parser.add_argument('--save_answers_intervene_path', type=str, default='./results_dump/llama-2-7b-instruct/answer_dump/nq_gen_answers_intervene.jsonl')
-    parser.add_argument('--save_summary_intervene_path', type=str, default='./results_dump/llama-2-7b-instruct/summary_dump/nq_gen_summary_intervene.json')
+    parser.add_argument('--save_answers_baseline_path', type=str, default='./results_dump/answer_dump/nq_gen_answers_baseline.jsonl')
+    parser.add_argument('--save_summary_baseline_path', type=str, default='./results_dump/summary_dump/nq_gen_summary_baseline.json')
+    parser.add_argument('--save_answers_intervene_path', type=str, default='./results_dump/answer_dump/nq_gen_answers_intervene.jsonl')
+    parser.add_argument('--save_summary_intervene_path', type=str, default='./results_dump/summary_dump/nq_gen_summary_intervene.json')
     parser.add_argument('--max_new_tokens', type=int, default=256, help='生成最大新token数（贪心解码）')
     args = parser.parse_args()
 
@@ -199,32 +193,33 @@ def main():
         probe_score_map=probe_score_map,
     )
 
-    # 干预函数：在最后一个 token 的 head 输出上加方向
-    def lt_modulated_vector_add(head_output, layer_name, start_edit_location='lt'):
-        head_output = rearrange(head_output, 'b s (h d) -> b s h d', h=num_heads)
-        # 归一化起始位置：默认最后一个 token；若传入非整数/不可转换，则回退为 -1
-        if isinstance(start_edit_location, int):
-            start_idx = max(0, start_edit_location)
-        elif isinstance(start_edit_location, torch.Tensor):
-            try:
-                start_idx = int(start_edit_location.item())
-            except Exception:
-                start_idx = -1
-        elif isinstance(start_edit_location, str) and start_edit_location == 'lt':
-            start_idx = -1
-        else:
-            start_idx = -1
+    # 构建 pyvene IntervenableModel：按层聚合方向并创建 ITI interveners
+    interveners = []
+    pv_config = []
+    top_heads_by_layer = {}
+    for layer_name, items in interventions.items():
+        # layer_name like 'model.layers.{L}.self_attn.head_out'
+        layer = int(layer_name.split('.')[2])
+        top_heads_by_layer.setdefault(layer, [])
+        for head, direction, proj_val_std, probe_factor in items:
+            # accumulate by head slices into a single big direction vector per layer
+            top_heads_by_layer[layer].append((head, direction, proj_val_std, probe_factor))
+    head_dim = args.head_dim
 
-        for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
-            direction_to_add = torch.tensor(direction).to(head_output.device)
-            if start_idx == -1:
-                # head_output[:, -1, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-                head_output[:, -1, head, :] += args.alpha * proj_val_std * direction_to_add
-            else:
-                # head_output[:, start_idx:, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-                head_output[:, start_idx:, head, :] += args.alpha * proj_val_std * direction_to_add
-        head_output = rearrange(head_output, 'b s h d -> b s (h d)')
-        return head_output
+    for layer, info_list in top_heads_by_layer.items():
+        direction_vec = torch.zeros(num_heads * head_dim, dtype=torch.float32)
+        for head, direction, proj_val_std, probe_factor in info_list:
+            dir = torch.tensor(direction, dtype=torch.float32)
+            # scale with proj std and probe factor and alpha
+            scaled = dir * (proj_val_std * float(probe_factor) * float(args.alpha))
+            direction_vec[head * head_dim: (head + 1) * head_dim] = scaled
+        intervener = ITI_Intervener(direction_vec, multiplier=1.0)
+        interveners.append(intervener)
+        pv_config.append({
+            "component": f"model.layers[{layer}].self_attn.o_proj.input",
+            "intervention": wrapper(intervener),
+        })
+    intervened_model = pv.IntervenableModel(pv_config, model)
 
     # 逐条生成并评估（标准RAG 与 探针干预RAG）
     os.makedirs(os.path.dirname(args.save_answers_baseline_path), exist_ok=True)
@@ -262,15 +257,15 @@ def main():
             preds_baseline.append(_clean_answer_text(gen_str_base))
 
             # 探针干预RAG（前48头，带探针分数因子）
-            layers_to_intervene = list(interventions.keys())
-            with TraceDict(model, layers_to_intervene, edit_output=lt_modulated_vector_add):
-                gen_tokens_itv = model.generate(
-                    input_ids,
-                    do_sample=False,
-                    max_new_tokens=args.max_new_tokens,
-                    num_return_sequences=1,
-                    pad_token_id=tokenizer.pad_token_id,
-                )[:, input_ids.shape[-1]:]
+            # 使用 pyvene 的 intervened_model 直接生成
+            _, gen_tokens_itv = intervened_model.generate(
+                input_ids,
+                do_sample=False,
+                max_new_tokens=args.max_new_tokens,
+                num_return_sequences=1,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            gen_tokens_itv = gen_tokens_itv[:, input_ids.shape[-1]:]
             gen_str_itv = tokenizer.decode(gen_tokens_itv[0], skip_special_tokens=True)
             preds_intervene.append(_clean_answer_text(gen_str_itv))
 

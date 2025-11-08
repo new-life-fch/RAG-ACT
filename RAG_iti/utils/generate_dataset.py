@@ -188,19 +188,19 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
     print("正在加载Llama模型...")
     
     # 使用pipeline加载模型
-    model_path = "/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf"
+    model_path = "/root/autodl-tmp/RAG-llm/models/Llama-3.1-8B-Instruct"
     
     # 自动选择设备 (GPU 优先)
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     # 使用 bfloat16 提高性能并减少显存占用
-    torch_dtype = torch.float16
+    torch_dtype = torch.bfloat16
     
     try:
         # 初始化 text-generation pipeline
         pipe = pipeline(
             "text-generation",
             model=model_path,
-            model_kwargs={"torch_dtype": torch_dtype},  # 加载模型时使用 bfloat16
+            model_kwargs={"dtype": torch_dtype},  # 加载模型时使用 bfloat16
             device=device,
         )
         print("Llama模型加载成功！")
@@ -285,8 +285,8 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
 # --- 主程序 ---
 if __name__ == "__main__":
     # 新功能：生成新数据集
-    input_file = '/root/shared-nvme/RAG-llm/RAG/data/nq-dev-train.jsonl'
-    output_file = '/root/shared-nvme/RAG-llm/RAG/data/llama_2_chat_7b.jsonl'
+    input_file = '/root/shared-nvme/RAG-llm/RAG/data/train.jsonl'
+    output_file = '/root/shared-nvme/RAG-llm/RAG/new_dataset.jsonl'
     
     # 先用10条数据进行测试
     generate_new_dataset(input_file, output_file, num_samples=3000, random_seed=2025)
