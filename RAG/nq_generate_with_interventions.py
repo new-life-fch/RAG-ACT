@@ -98,8 +98,8 @@ def build_nq_generation_inputs(
         inputs.append(input_ids)
         gold_answers_list.append(list(answers))
 
-        if i == 0:
-            print(f"[Generation Chat Input Example]\nSYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}")
+        # if i == 0:
+        #     print(f"[Generation Chat Input Example]\nSYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}")
 
     return inputs, gold_answers_list
 
@@ -218,11 +218,11 @@ def main():
         for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
             direction_to_add = torch.tensor(direction).to(head_output.device)
             if start_idx == -1:
-                # head_output[:, -1, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-                head_output[:, -1, head, :] += args.alpha * proj_val_std * direction_to_add
+                head_output[:, -1, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
+                # head_output[:, -1, head, :] += args.alpha * proj_val_std * direction_to_add
             else:
-                # head_output[:, start_idx:, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-                head_output[:, start_idx:, head, :] += args.alpha * proj_val_std * direction_to_add
+                head_output[:, start_idx:, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
+                # head_output[:, start_idx:, head, :] += args.alpha * proj_val_std * direction_to_add
         head_output = rearrange(head_output, 'b s h d -> b s (h d)')
         return head_output
 
