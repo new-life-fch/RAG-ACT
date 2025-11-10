@@ -450,25 +450,88 @@ def compute_em_f1(pred: str, gold_list: List[str]) -> Tuple[float, float]:
         recall = num_same / len(b_tokens)
         return 2 * precision * recall / (precision + recall)
 
-    f1_scores = [f1(pred_norm, g) for g in gold_norms]
-    f1_max = max(f1_scores) if f1_scores else 0.0
+    # 与 FlashRAG 对齐：对特殊词 'yes', 'no', 'noanswer' 做保护性跳过
+    special_tokens = {"yes", "no", "noanswer"}
+    f1_candidates = []
+    for g in gold_norms:
+        if (pred_norm in special_tokens and pred_norm != g) or (g in special_tokens and pred_norm != g):
+            # 若预测或金标准是特殊词且不相等，则跳过该配对
+            continue
+        f1_candidates.append(f1(pred_norm, g))
+    f1_max = max(f1_candidates) if f1_candidates else 0.0
     return em, f1_max
 
 
 def evaluate_nq_em_f1(predictions: List[str], gold_answers_list: List[List[str]]) -> Tuple[float, float]:
-    """
-    批量计算 EM、F1。输入：
-    - `predictions`: 模型输出的答案字符串列表
-    - `gold_answers_list`: 每条样本对应的金标准答案字符串列表（考虑整个正确答案列表）
-
-    返回：整体平均 EM、整体平均 F1。
-    """
+    """批量计算 EM、F1（NQ 默认逻辑）。"""
     assert len(predictions) == len(gold_answers_list), '预测与金标准样本数不一致'
     ems, f1s = [], []
     for pred, golds in zip(predictions, gold_answers_list):
         em, f1 = compute_em_f1(pred, golds)
         ems.append(em)
         f1s.append(f1)
+    return float(np.mean(ems)), float(np.mean(f1s))
+
+
+def compute_em(pred: str, gold_list: List[str], dataset_name: str = 'nq') -> float:
+    """通用 EM 计算：支持 curatedtrec 的正则匹配，其它数据集按规范化相等。"""
+    pred_norm = normalize_answer(pred)
+    is_regex = (dataset_name == 'curatedtrec')
+    score = 0.0
+    for gold in gold_list:
+        if is_regex:
+            try:
+                import re
+                pattern = re.compile(gold, re.IGNORECASE)
+                if re.fullmatch(pattern, pred_norm) is not None:
+                    score = 1.0
+                    break
+            except Exception:
+                # 解析失败则回退为普通匹配
+                if normalize_answer(gold) == pred_norm:
+                    score = 1.0
+                    break
+        else:
+            if normalize_answer(gold) == pred_norm:
+                score = 1.0
+                break
+    return score
+
+
+def compute_f1_only(pred: str, gold_list: List[str]) -> float:
+    """与 FlashRAG 对齐的 token 级 F1（含 yes/no/noanswer 特殊处理）。"""
+    pred_norm = normalize_answer(pred)
+    gold_norms = [normalize_answer(g) for g in gold_list]
+    special_tokens = {"yes", "no", "noanswer"}
+
+    def f1_pair(a: str, b: str) -> float:
+        a_tokens = a.split()
+        b_tokens = b.split()
+        common = set(a_tokens) & set(b_tokens)
+        num_same = sum(min(a_tokens.count(t), b_tokens.count(t)) for t in common)
+        if len(a_tokens) == 0 or len(b_tokens) == 0:
+            return 0.0
+        if num_same == 0:
+            return 0.0
+        precision = num_same / len(a_tokens)
+        recall = num_same / len(b_tokens)
+        return 2 * precision * recall / (precision + recall)
+
+    f1_candidates = []
+    for g in gold_norms:
+        if (pred_norm in special_tokens and pred_norm != g) or (g in special_tokens and pred_norm != g):
+            continue
+        f1_candidates.append(f1_pair(pred_norm, g))
+    return max(f1_candidates) if f1_candidates else 0.0
+
+
+def evaluate_em_f1(predictions: List[str], gold_answers_list: List[List[str]], dataset_name: str = 'nq') -> Tuple[float, float]:
+    """通用批量 EM/F1 评估：支持 curatedtrec 的正则 EM 与统一 F1。"""
+    assert len(predictions) == len(gold_answers_list), '预测与金标准样本数不一致'
+    ems, f1s = [], []
+    for pred, golds in zip(predictions, gold_answers_list):
+        ems.append(compute_em(pred, golds, dataset_name=dataset_name))
+        f1s.append(compute_f1_only(pred, golds))
     return float(np.mean(ems)), float(np.mean(f1s))
 
 # ===============

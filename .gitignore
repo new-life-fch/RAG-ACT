@@ -4,3 +4,5 @@ truthfulqa/
 TruthfulQA/
 features/
 results_dump/
+llama/
+FlashRAG/
