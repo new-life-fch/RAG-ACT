@@ -18,7 +18,6 @@ from llama_utils import (
     _build_messages_input,
     get_interventions_dict,
     evaluate_nq_em_f1,
-    # compute_em_f1  # 若需要逐样本计算可启用
 )
 
 
@@ -38,12 +37,6 @@ def build_nq_generation_inputs(
     sample_size: Optional[int] = None,
     sample_seed: int = 2025,
 ) -> Tuple[List[torch.Tensor], List[List[str]]]:
-    """
-    为 NQ 数据生成阶段构造输入：系统 + 用户消息（不包含助手答案）。
-    返回：
-    - inputs: 列表，元素为 `torch.Tensor` 的 `input_ids`
-    - gold_answers_list: 列表，元素为正确答案字符串列表（用于 EM/F1）
-    """
     entries = _load_nq_jsonl(jsonl_path, max_samples=max_samples)
 
     if sample_size is not None and sample_size > 0:
@@ -90,7 +83,6 @@ def build_nq_generation_inputs(
 
 
 def load_scores_csv(path: str) -> List[Tuple[int, int, float]]:
-    """读取 CSV，返回 (layer, head, score) 列表。"""
     items: List[Tuple[int, int, float]] = []
     with open(path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
@@ -98,12 +90,9 @@ def load_scores_csv(path: str) -> List[Tuple[int, int, float]]:
             if not row:
                 continue
             try:
-                layer = int(row[0])
-                head = int(row[1])
-                score = float(row[2])
+                layer = int(row[0]); head = int(row[1]); score = float(row[2])
                 items.append((layer, head, score))
             except Exception:
-                # 跳过标题或异常行
                 continue
     return items
 
@@ -118,18 +107,8 @@ def make_selection_strategies(
     scores: List[Tuple[int, int, float]],
     L: int,
     H: int,
-    val_accs: Optional[np.ndarray] = None,
+    saved_top_heads: Optional[List[Tuple[int,int]]] = None,
 ) -> Dict[str, List[Tuple[int, int]]]:
-    """
-    构造多种头选择方案（按指定集合）：
-    - 分数阈值：score>= {0.5,0.6,0.7,0.8,0.9}
-    - 层区间：layers_{0_10, 10_20, 20_31, 0_20, 10_31, 0_31}
-      区间采用零基索引，右端为 32 以包含第 31 层：例如 20_31 -> [20, min(32, L))。
-    - 全部头：all_heads
-    - 全局 Top-k：topk_{64,128,256,512}_by_score（按 CSV 分数降序）
-    - 分层 Top-m：per_layer_top_{1,2,4,8,16}
-    返回字典：策略名 -> (layer, head) 列表
-    """
     by_score = sorted(scores, key=lambda x: x[2], reverse=True)
     strategies: Dict[str, List[Tuple[int, int]]] = {}
 
@@ -137,28 +116,25 @@ def make_selection_strategies(
     for thr in [0.5, 0.6, 0.7, 0.8, 0.9]:
         strategies[f'score_ge_{thr}'] = [(l, h) for (l, h, s) in scores if s >= thr]
 
-    # 层区间（右端做 32 层兼容处理）
+    # 层区间（零基，右端 32 以包含第31层）
     def clamp_end(e: int) -> int:
         return min(e, L)
 
     strategies['layers_0_10'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(10)]
     strategies['layers_10_20'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(20)]
     strategies['layers_20_31'] = [(l, h) for (l, h, s) in scores if 20 <= l < clamp_end(32)]
-    strategies['layers_0_20'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(20)]
     strategies['layers_10_31'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(32)]
     strategies['layers_0_31'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(32)]
 
     # 全部头
     strategies['all_heads'] = [(l, h) for (l, h, s) in scores]
 
-    # 全局 top-k（按分数降序）
-    K_set = [64, 128, 256, 512]
-    total = len(by_score)
-    for k in K_set:
-        kk = min(k, total)
+    # 全局 top-k
+    for k in [64, 128, 256, 512]:
+        kk = min(k, len(by_score))
         strategies[f'topk_{kk}_by_score'] = [(l, h) for (l, h, s) in by_score[:kk]]
 
-    # 分层 top-m（每层按分数取前 m 个）
+    # 分层 top-m
     grouped: Dict[int, List[Tuple[int, int, float]]] = {l: [] for l in range(L)}
     for (l, h, s) in scores:
         grouped.setdefault(l, []).append((l, h, s))
@@ -168,6 +144,10 @@ def make_selection_strategies(
             heads_sorted = sorted(grouped.get(l, []), key=lambda x: x[2], reverse=True)
             sel.extend([(l, h) for (_, h, _) in heads_sorted[:m]])
         strategies[f'per_layer_top_{m}'] = sel
+
+    # 读取已保存 top heads（可选）
+    if saved_top_heads is not None:
+        strategies['saved_top_heads'] = list(saved_top_heads)
 
     return strategies
 
@@ -217,6 +197,7 @@ def run_intervention(
     head_dim: int,
     num_heads: Optional[int],
     use_probe_factor: bool,
+    use_proj_val_std: bool,
     val_accs: Optional[np.ndarray],
     max_new_tokens: int,
     timeout_minutes: Optional[float] = None,
@@ -246,19 +227,21 @@ def run_intervention(
 
     def lt_modulated_vector_add(head_output, layer_name, start_edit_location='lt'):
         h_out = rearrange(head_output, 'b s (h d) -> b s h d', h=num_heads_calc)
+        # last token by default
         start_idx = -1 if start_edit_location == 'lt' else -1
-        # 解析层索引（model.layers.{i}.self_attn.head_out）
+        # 解析层索引
         try:
             layer_idx = int(str(layer_name).split('.')[2])
         except Exception:
             layer_idx = None
         for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
             direction_to_add = torch.tensor(direction).to(h_out.device)
-            # 按层选择强度：若提供 alpha_per_layer，则优先使用该层的强度
             alpha_cur = alpha
             if (alpha_per_layer is not None) and (layer_idx is not None) and (layer_idx in alpha_per_layer):
                 alpha_cur = alpha_per_layer[layer_idx]
-            strength = alpha_cur * proj_val_std * probe_factor
+            proj_mult = (proj_val_std if use_proj_val_std else 1.0)
+            reliability = float(probe_factor)
+            strength = alpha_cur * proj_mult * (reliability ** args.pf_gamma)
             if start_idx == -1:
                 h_out[:, -1, head, :] += strength * direction_to_add
             else:
@@ -270,10 +253,10 @@ def run_intervention(
     start_time = time.time()
     timed_out = False
     with torch.no_grad():
-        for input_ids in tqdm(
-            inputs,
-            desc=f'intervene[{strategy_name}] alpha={alpha} pf={int(use_probe_factor)}'
-        ):
+        # 进度条描述：若是 alphamap，展示 tag
+        desc = (f"intervene[{strategy_name}] alphamap pf={int(use_probe_factor)}" if alpha_per_layer is not None
+                else f"intervene[{strategy_name}] alpha={alpha} pf={int(use_probe_factor)}")
+        for input_ids in tqdm(inputs, desc=desc):
             input_ids = input_ids.to(device)
             with TraceDict(model, layers_to_intervene, edit_output=lt_modulated_vector_add):
                 gen_tokens = model.generate(
@@ -286,14 +269,12 @@ def run_intervention(
             gen_str = tokenizer.decode(gen_tokens[0], skip_special_tokens=True)
             preds.append(clean_answer_text(gen_str))
 
-            # 检测单次实验超时并中断
             if timeout_minutes is not None:
                 elapsed_min = (time.time() - start_time) / 60.0
                 if elapsed_min > timeout_minutes:
                     timed_out = True
                     break
 
-    # 计算指标：若超时，则仅对已完成样本计算平均
     if timed_out:
         subset_golds = gold_answers_list[:len(preds)]
         em_i, f1_i = evaluate_nq_em_f1(preds, subset_golds) if len(preds) else (0.0, 0.0)
@@ -315,8 +296,32 @@ def run_intervention(
         }
 
 
+def parse_range_or_list(text: Optional[str], default: List[float]) -> List[float]:
+    if not text:
+        return default
+    t = text.strip()
+    if t.startswith('range:'):
+        try:
+            _, a, b, s = t.split(':')
+            a = float(a); b = float(b); s = float(s)
+            vals = []
+            v = a
+            # 包含 b 边界（若步长整合到恰好达到），否则到达前一个
+            while v <= b + 1e-8:
+                vals.append(round(v, 6))
+                v += s
+            return vals
+        except Exception:
+            raise ValueError('range 格式错误，应为 range:start:stop:step')
+    else:
+        try:
+            return [float(x) for x in t.split(',') if x.strip()]
+        except Exception:
+            raise ValueError('解析列表失败，请使用逗号分隔数值或 range:start:stop:step')
+
+
 def main():
-    parser = argparse.ArgumentParser(description='NQ 干预超参数搜索')
+    parser = argparse.ArgumentParser(description='NQ 干预超参数搜索（整合版）')
     parser.add_argument('--model_name', type=str, default='llama2_chat_7B')
     parser.add_argument('--dataset_path', type=str, default='/root/shared-nvme/RAG-llm/RAG/data/test.jsonl')
     parser.add_argument('--use_chat_template', action='store_true')
@@ -329,27 +334,35 @@ def main():
     parser.add_argument('--val_accs_path', type=str, required=True)
     parser.add_argument('--tuning_headwise_path', type=str, default='../features/llama2_chat_7B_nq_head_wise.npy')
     parser.add_argument('--scores_csv', type=str, required=True)
+    parser.add_argument('--saved_top_heads_path', type=str, default=None)
     parser.add_argument('--max_new_tokens', type=int, default=256)
-    parser.add_argument('--results_root', type=str, default='./results_dump/llama-2-7b-instruct')
-    # 试跑增强参数
+    parser.add_argument('--results_root', type=str, default='./results_dump/llama-2-7b-instruct-unified')
+
+    # 选择策略与过滤
     parser.add_argument('--include_strategies', type=str, default=None,
-                        help='逗号分隔的策略名白名单，例如: layers_10_31,score_ge_0.7,topk_256_by_score,per_layer_top_4')
-    parser.add_argument('--alphas', type=str, default=None,
-                        help='逗号分隔的干预强度（支持浮点数），例如: 2,6,10 或 0.7；不传则使用默认 1..19 步长2')
-    parser.add_argument('--probe_factor_modes', type=str, default='both', choices=['both','true','false'],
-                        help='是否乘探针分数：both/true/false')
+                        help='逗号分隔的策略白名单，例如: layers_10_31,score_ge_0.7,topk_256_by_score,per_layer_top_4,saved_top_heads')
     parser.add_argument('--limit_per_strategy', type=int, default=None,
                         help='每个策略最多选择的头数量；超过则按 CSV 分数降序截断')
-    parser.add_argument('--supplement', action='store_true',
-                        help='启用补充实验预设参数组合，并将结果保存到 results_dump/llama-2-7b-instruct-supplement')
+
+    # 强度与乘因子
+    parser.add_argument('--alphas', type=str, default='range:1:19:2',
+                        help='干预强度列表或范围：逗号列表或 range:start:stop:step')
+    parser.add_argument('--probe_factor_modes', type=str, default='both', choices=['both','true','false'],
+                        help='是否乘探针分数：both/true/false')
+    parser.add_argument('--use_proj_val_std', action='store_true',
+                        help='启用 proj_val_std 作为强度乘子（默认不启用）')
+
+    # 复合方案与运行控制
+    parser.add_argument('--composites', type=str, default=None,
+                        help='逗号分隔的复合强度方案（alphamap），例如: 0-9=5+20-31=15,0-9=5+10-19=10+20-31=15')
+    parser.add_argument('--composites_only', action='store_true',
+                        help='仅运行复合方案（不跑单策略）')
     parser.add_argument('--timeout_minutes', type=float, default=6.0,
                         help='单次实验的最长运行时间（分钟），超过则中断并进入下一组参数')
+    parser.add_argument('--skip_if_exists', action='store_true',
+                        help='若当前实验的 summary 文件已存在则跳过执行')
 
     args = parser.parse_args()
-
-    # 补充模式：切换结果目录到 supplement
-    if args.supplement:
-        args.results_root = './results_dump/llama-2-7b-instruct-supplement'
 
     # 目录准备
     ans_dir = os.path.join(args.results_root, 'answer_dump')
@@ -372,28 +385,21 @@ def main():
 
     # 构造输入
     inputs, gold_answers_list = build_nq_generation_inputs(
-        args.dataset_path,
-        tokenizer,
-        max_samples=None,
-        max_docs=args.max_docs,
-        use_chat_template=args.use_chat_template,
-        sample_size=args.sample_size,
-        sample_seed=args.sample_seed,
+        args.dataset_path, tokenizer, max_samples=None, max_docs=args.max_docs,
+        use_chat_template=args.use_chat_template, sample_size=args.sample_size, sample_seed=args.sample_seed,
     )
 
     # 先跑一次 baseline
     baseline_ans, baseline_sum = run_baseline(model, tokenizer, device, inputs, gold_answers_list, args.max_new_tokens)
     baseline_sum.update({"alpha": 0.0, "model_name": args.model_name, "intervention": "none", "sample_size": args.sample_size})
-    baseline_ans_path = os.path.join(ans_dir, 'nq_hparam_baseline_answers.jsonl')
-    baseline_sum_path = os.path.join(sum_dir, 'nq_hparam_baseline_summary.json')
+    baseline_ans_path = os.path.join(ans_dir, 'nq_hparam_unified_baseline_answers.jsonl')
+    baseline_sum_path = os.path.join(sum_dir, 'nq_hparam_unified_baseline_summary.json')
     with open(baseline_ans_path, 'w', encoding='utf-8') as f:
         for pred, golds in zip(baseline_ans, gold_answers_list):
-            item = {"prediction": pred, "gold_answers": golds}
-            f.write(json.dumps(item, ensure_ascii=False) + '\n')
+            f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
     with open(baseline_sum_path, 'w', encoding='utf-8') as f:
         json.dump(baseline_sum, f, ensure_ascii=False, indent=2)
 
-    # 即时打印：标准 RAG 指标与（相对基线）提升（为 0）
     print(
         f"[Baseline] samples={args.sample_size} EM={baseline_sum['EM']:.4f} "
         f"F1={baseline_sum['F1']:.4f} ΔEM={0.0:+.4f} ΔF1={0.0:+.4f}"
@@ -406,7 +412,18 @@ def main():
     tuning_headwise = np.load(args.tuning_headwise_path)  # (B, L, H*D)
     scores = load_scores_csv(args.scores_csv)
     L, H = infer_LH_from_scores(scores)
-    selection_map = make_selection_strategies(scores, L, H, val_accs)
+
+    saved_top_heads = None
+    if args.saved_top_heads_path:
+        with open(args.saved_top_heads_path, 'rb') as f:
+            obj = pickle.load(f)
+            if isinstance(obj, dict):
+                saved_top_heads = obj.get('top_heads', None) or obj.get('heads', None)
+            elif isinstance(obj, list):
+                saved_top_heads = obj
+
+    selection_map = make_selection_strategies(scores, L, H, saved_top_heads=saved_top_heads)
+
     # 策略白名单过滤
     if args.include_strategies:
         allow = {name.strip() for name in args.include_strategies.split(',') if name.strip()}
@@ -415,224 +432,150 @@ def main():
     # 构建 (layer, head) -> score 映射，供限量与排序使用
     score_map: Dict[Tuple[int,int], float] = {(l,h): s for (l,h,s) in scores}
 
-    # 超参数网格（补充模式下先执行复合方案，再执行各策略的单独强度）
-    if args.alphas:
-        try:
-            alphas = [float(x) for x in args.alphas.split(',') if x.strip()]
-        except Exception:
-            raise ValueError('解析 --alphas 失败，请使用逗号分隔数字，例如 1,5,9 或 0.7')
-    else:
-        alphas = [float(x) for x in range(1, 20, 2)]  # 1..19 步长2
-
-    if args.supplement:
+    # 超参数网格
+    alphas = parse_range_or_list(args.alphas, default=[float(x) for x in range(1, 20, 2)])
+    if args.probe_factor_modes == 'both':
         use_probe_factors = [False, True]
+    elif args.probe_factor_modes == 'true':
+        use_probe_factors = [True]
     else:
-        if args.probe_factor_modes == 'both':
-            use_probe_factors = [False, True]
-        elif args.probe_factor_modes == 'true':
-            use_probe_factors = [True]
-        else:
-            use_probe_factors = [False]
+        use_probe_factors = [False]
 
-    # 汇总表
     summary_rows = []
 
-    # 补充实验的预设参数组合：策略 -> 专属 alphas
-    supplement_plan: Dict[str, List[float]] = {
-        'layers_0_10': [5.0],
-        'layers_10_31': [7.0],
-        'layers_20_31': [11.0, 13.0, 15.0],  # 含单独 9.0 以跑第二点
-        'layers_10_20': [10.0, 11.0, 12.0, 13.0, 2.0, 0.7, 0.5, 0.3],
-    }
+    # 解析复合方案（若指定 composites 或 composites_only）
+    composite_specs: List[str] = []
+    if args.composites:
+        composite_specs = [s.strip() for s in args.composites.split(',') if s.strip()]
 
-    # 先执行补充模式下的复合方案（不同层区间同时不同强度）
-    if args.supplement:
-        # 复合 1：0-9→5，10-31→7
-        if ('layers_0_10' in selection_map) and ('layers_10_31' in selection_map):
-            comp_name = 'layers_0_10+layers_10_31'
-            comp_heads = list(set(selection_map['layers_0_10']) | set(selection_map['layers_10_31']))
-            alpha_map = {l: 5.0 for l in range(0, 10)}
-            alpha_map.update({l: 7.0 for l in range(10, min(32, L))})
+    def parse_composite_spec(spec: str) -> Tuple[str, Dict[int, float], List[Tuple[int,int]], str]:
+        # 形如："0-9=5+20-31=15"
+        import re
+        segs = [p.strip() for p in spec.split('+') if p.strip()]
+        alpha_map: Dict[int, float] = {}
+        heads_union: List[Tuple[int,int]] = []
+        alpha_tag_parts = []
+        comp_keys = []
+        for seg in segs:
+            m = re.match(r'^(\d+)\s*-\s*(\d+)\s*=\s*([0-9]*\.?[0-9]+)$', seg)
+            if not m:
+                raise ValueError(f'无法解析复合段: {seg}')
+            s = int(m.group(1)); e = int(m.group(2)); val = float(m.group(3))
+            key = f'layers_{s}_{e}' if e == 31 else f'layers_{s}_{e+1}'
+            if key not in selection_map:
+                raise ValueError(f'复合段对应的策略不存在: {key}')
+            heads_union.extend(selection_map[key])
+            for l in range(s, min(e+1, L)):
+                alpha_map[l] = val
+            alpha_tag_parts.append(f'{s}-{e}={val}')
+            comp_keys.append(key)
+        comp_name = '+'.join(comp_keys)
+        alpha_tag = '_'.join(alpha_tag_parts).replace('-', '_')
+        return comp_name, alpha_map, list(set(heads_union)), alpha_tag
+
+    # 先运行复合方案（若指定 composites_only 或 composites 不为空且优先）
+    if composite_specs:
+        for spec in composite_specs:
+            comp_name, alpha_map, comp_heads, alpha_tag = parse_composite_spec(spec)
             unique_heads = sorted(list({(l, h) for (l, h) in comp_heads}))
             if args.limit_per_strategy and len(unique_heads) > args.limit_per_strategy:
                 unique_heads = sorted(unique_heads, key=lambda lh: score_map.get(lh, 0.0), reverse=True)[:args.limit_per_strategy]
             k_count = len(unique_heads)
-            if k_count:
-                for use_pf in use_probe_factors:
-                    preds, summary = run_intervention(
-                        model, tokenizer, device, inputs, gold_answers_list,
-                        0.0, comp_name, unique_heads, probes, tuning_headwise,
-                        args.head_dim, args.num_heads, use_pf, val_accs,
-                        args.max_new_tokens, args.timeout_minutes, alpha_map,
-                    )
-                    ans_path = os.path.join(ans_dir, f"nq_hparam_{comp_name}_alphamap_0-9=5_10-31=7_pf{int(use_pf)}_answers.jsonl")
-                    with open(ans_path, 'w', encoding='utf-8') as f:
-                        for pred, golds in zip(preds, gold_answers_list):
-                            f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
-                    out_summary = {
-                        "EM": summary["EM"], "F1": summary["F1"], "alpha": "map",
-                        "alpha_map": {"0-9": 5.0, "10-31": 7.0},
-                        "model_name": args.model_name, "intervention": comp_name,
-                        "use_probe_factor": bool(use_pf), "num_heads_selected": k_count,
-                        "sample_size": args.sample_size,
-                        "timed_out": bool(summary.get("timed_out", False)),
-                        "num_completed": int(summary.get("num_completed", len(preds))),
-                        "elapsed_min": float(summary.get("elapsed_min", 0.0)),
-                    }
-                    sum_path = os.path.join(sum_dir, f"nq_hparam_{comp_name}_alphamap_0-9=5_10-31=7_pf{int(use_pf)}_summary.json")
-                    with open(sum_path, 'w', encoding='utf-8') as f:
-                        json.dump(out_summary, f, ensure_ascii=False, indent=2)
-                    d_em = out_summary["EM"] - baseline_sum["EM"]
-                    d_f1 = out_summary["F1"] - baseline_sum["F1"]
-                    status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
-                    print((
-                        f"[Intervene:{status}] strategy={comp_name} heads={k_count} alphamap=0-9=5_10-31=7 pf={int(use_pf)} "
-                        f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
-                        f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
-                    ))
-                    if not out_summary["timed_out"]:
-                        summary_rows.append([comp_name, k_count, 'map_0-9=5_10-31=7', int(use_pf), out_summary["EM"], out_summary["F1"]])
-
-        # 复合 2：0-9→5，20-31→9
-        if ('layers_0_10' in selection_map) and ('layers_20_31' in selection_map):
-            comp_name = 'layers_0_10+layers_20_31'
-            comp_heads = list(set(selection_map['layers_0_10']) | set(selection_map['layers_20_31']))
-            alpha_map = {l: 5.0 for l in range(0, 10)}
-            alpha_map.update({l: 9.0 for l in range(20, min(32, L))})
-            unique_heads = sorted(list({(l, h) for (l, h) in comp_heads}))
-            if args.limit_per_strategy and len(unique_heads) > args.limit_per_strategy:
-                unique_heads = sorted(unique_heads, key=lambda lh: score_map.get(lh, 0.0), reverse=True)[:args.limit_per_strategy]
-            k_count = len(unique_heads)
-            if k_count:
-                for use_pf in use_probe_factors:
-                    preds, summary = run_intervention(
-                        model, tokenizer, device, inputs, gold_answers_list,
-                        0.0, comp_name, unique_heads, probes, tuning_headwise,
-                        args.head_dim, args.num_heads, use_pf, val_accs,
-                        args.max_new_tokens, args.timeout_minutes, alpha_map,
-                    )
-                    ans_path = os.path.join(ans_dir, f"nq_hparam_{comp_name}_alphamap_0-9=5_20-31=9_pf{int(use_pf)}_answers.jsonl")
-                    with open(ans_path, 'w', encoding='utf-8') as f:
-                        for pred, golds in zip(preds, gold_answers_list):
-                            f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
-                    out_summary = {
-                        "EM": summary["EM"], "F1": summary["F1"], "alpha": "map",
-                        "alpha_map": {"0-9": 5.0, "20-31": 9.0},
-                        "model_name": args.model_name, "intervention": comp_name,
-                        "use_probe_factor": bool(use_pf), "num_heads_selected": k_count,
-                        "sample_size": args.sample_size,
-                        "timed_out": bool(summary.get("timed_out", False)),
-                        "num_completed": int(summary.get("num_completed", len(preds))),
-                        "elapsed_min": float(summary.get("elapsed_min", 0.0)),
-                    }
-                    sum_path = os.path.join(sum_dir, f"nq_hparam_{comp_name}_alphamap_0-9=5_20-31=9_pf{int(use_pf)}_summary.json")
-                    with open(sum_path, 'w', encoding='utf-8') as f:
-                        json.dump(out_summary, f, ensure_ascii=False, indent=2)
-                    d_em = out_summary["EM"] - baseline_sum["EM"]
-                    d_f1 = out_summary["F1"] - baseline_sum["F1"]
-                    status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
-                    print((
-                        f"[Intervene:{status}] strategy={comp_name} heads={k_count} alphamap=0-9=5_20-31=9 pf={int(use_pf)} "
-                        f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
-                        f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
-                    ))
-                    if not out_summary["timed_out"]:
-                        summary_rows.append([comp_name, k_count, 'map_0-9=5_20-31=9', int(use_pf), out_summary["EM"], out_summary["F1"]])
-
-    # 常规/补充的单策略循环
-    for sel_name, sel_heads in selection_map.items():
-        # 补充模式：仅保留设定的策略
-        if args.supplement and sel_name not in supplement_plan:
-            continue
-        # 补充模式：仅保留设定的策略
-        if args.supplement and sel_name not in supplement_plan:
-            continue
-        unique_heads = sorted(list({(l, h) for (l, h) in sel_heads}))
-        # 按需限量：超过限制则按分数降序截断
-        if args.limit_per_strategy and len(unique_heads) > args.limit_per_strategy:
-            unique_heads = sorted(unique_heads, key=lambda lh: score_map.get(lh, 0.0), reverse=True)[:args.limit_per_strategy]
-        k_count = len(unique_heads)
-        if k_count == 0:
-            continue
-
-        # 针对补充模式，使用每个策略的专属 alphas；否则使用通用 alphas
-        local_alphas = supplement_plan[sel_name] if args.supplement else alphas
-        for alpha in local_alphas:
+            if not k_count:
+                continue
             for use_pf in use_probe_factors:
+                sum_path = os.path.join(sum_dir, f"nq_unified_{comp_name}_alphamap_{alpha_tag}_pf{int(use_pf)}_summary.json")
+                if args.skip_if_exists and os.path.exists(sum_path):
+                    print(f"[Skip] exists: {sum_path}")
+                    continue
                 preds, summary = run_intervention(
-                    model,
-                    tokenizer,
-                    device,
-                    inputs,
-                    gold_answers_list,
-                    alpha,
-                    sel_name,
-                    unique_heads,
-                    probes,
-                    tuning_headwise,
-                    args.head_dim,
-                    args.num_heads,
-                    use_pf,
-                    val_accs,
-                    args.max_new_tokens,
-                    args.timeout_minutes,
-                    None,
+                    model, tokenizer, device, inputs, gold_answers_list,
+                    0.0, comp_name, unique_heads, probes, tuning_headwise,
+                    args.head_dim, args.num_heads, use_pf, args.use_proj_val_std,
+                    val_accs, args.max_new_tokens, args.timeout_minutes, alpha_map,
                 )
-
-                # 保存逐条答案
-                ans_path = os.path.join(ans_dir, f"nq_hparam_{sel_name}_alpha{alpha}_pf{int(use_pf)}_answers.jsonl")
+                ans_path = os.path.join(ans_dir, f"nq_unified_{comp_name}_alphamap_{alpha_tag}_pf{int(use_pf)}_answers.jsonl")
                 with open(ans_path, 'w', encoding='utf-8') as f:
                     for pred, golds in zip(preds, gold_answers_list):
-                        item = {"prediction": pred, "gold_answers": golds}
-                        f.write(json.dumps(item, ensure_ascii=False) + '\n')
-
-                # 保存摘要
+                        f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
                 out_summary = {
-                    "EM": summary["EM"],
-                    "F1": summary["F1"],
-                    "alpha": float(alpha),
-                    "model_name": args.model_name,
-                    "intervention": sel_name,
-                    "use_probe_factor": bool(use_pf),
-                    "num_heads_selected": k_count,
+                    "EM": summary["EM"], "F1": summary["F1"], "alpha": "map",
+                    "alpha_map": alpha_tag, "model_name": args.model_name, "intervention": comp_name,
+                    "use_probe_factor": bool(use_pf), "num_heads_selected": k_count,
                     "sample_size": args.sample_size,
                     "timed_out": bool(summary.get("timed_out", False)),
                     "num_completed": int(summary.get("num_completed", len(preds))),
                     "elapsed_min": float(summary.get("elapsed_min", 0.0)),
                 }
-                sum_path = os.path.join(sum_dir, f"nq_hparam_{sel_name}_alpha{alpha}_pf{int(use_pf)}_summary.json")
                 with open(sum_path, 'w', encoding='utf-8') as f:
                     json.dump(out_summary, f, ensure_ascii=False, indent=2)
-
-                # 即时打印：当前实验的指标与相对基线的提升与耗时
                 d_em = out_summary["EM"] - baseline_sum["EM"]
                 d_f1 = out_summary["F1"] - baseline_sum["F1"]
                 status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
-                print(
-                    (
-                        f"[Intervene:{status}] strategy={sel_name} heads={k_count} alpha={alpha} pf={int(use_pf)} "
-                        f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} "
-                        f"ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
-                        f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
-                    )
-                )
-
-                # 记录汇总行（仅收录未超时实验，避免不公平排序）
+                print((
+                    f"[Intervene:{status}] strategy={comp_name} heads={k_count} alphamap={alpha_tag} pf={int(use_pf)} "
+                    f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
+                    f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
+                ))
                 if not out_summary["timed_out"]:
-                    summary_rows.append([
-                        sel_name,
-                        k_count,
-                        alpha,
-                        int(use_pf),
-                        out_summary["EM"],
-                        out_summary["F1"],
-                    ])
+                    summary_rows.append([comp_name, k_count, f'map_{alpha_tag}', int(use_pf), out_summary["EM"], out_summary["F1"]])
+
+    # 若 composites_only，则跳过单策略网格
+    if not args.composites_only:
+        for sel_name, sel_heads in selection_map.items():
+            unique_heads = sorted(list({(l, h) for (l, h) in sel_heads}))
+            if args.limit_per_strategy and len(unique_heads) > args.limit_per_strategy:
+                unique_heads = sorted(unique_heads, key=lambda lh: score_map.get(lh, 0.0), reverse=True)[:args.limit_per_strategy]
+            k_count = len(unique_heads)
+            if k_count == 0:
+                continue
+            for alpha in alphas:
+                for use_pf in use_probe_factors:
+                    sum_path = os.path.join(sum_dir, f"nq_unified_{sel_name}_alpha{alpha}_pf{int(use_pf)}_summary.json")
+                    if args.skip_if_exists and os.path.exists(sum_path):
+                        print(f"[Skip] exists: {sum_path}")
+                        continue
+                    preds, summary = run_intervention(
+                        model, tokenizer, device, inputs, gold_answers_list,
+                        float(alpha), sel_name, unique_heads, probes, tuning_headwise,
+                        args.head_dim, args.num_heads, use_pf, args.use_proj_val_std,
+                        val_accs, args.max_new_tokens, args.timeout_minutes, None,
+                    )
+
+                    ans_path = os.path.join(ans_dir, f"nq_unified_{sel_name}_alpha{alpha}_pf{int(use_pf)}_answers.jsonl")
+                    with open(ans_path, 'w', encoding='utf-8') as f:
+                        for pred, golds in zip(preds, gold_answers_list):
+                            f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
+
+                    out_summary = {
+                        "EM": summary["EM"], "F1": summary["F1"], "alpha": float(alpha),
+                        "model_name": args.model_name, "intervention": sel_name,
+                        "use_probe_factor": bool(use_pf), "num_heads_selected": k_count,
+                        "sample_size": args.sample_size,
+                        "timed_out": bool(summary.get("timed_out", False)),
+                        "num_completed": int(summary.get("num_completed", len(preds))),
+                        "elapsed_min": float(summary.get("elapsed_min", 0.0)),
+                    }
+                    with open(sum_path, 'w', encoding='utf-8') as f:
+                        json.dump(out_summary, f, ensure_ascii=False, indent=2)
+
+                    d_em = out_summary["EM"] - baseline_sum["EM"]
+                    d_f1 = out_summary["F1"] - baseline_sum["F1"]
+                    status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
+                    print((
+                        f"[Intervene:{status}] strategy={sel_name} heads={k_count} alpha={alpha} pf={int(use_pf)} "
+                        f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
+                        f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
+                    ))
+
+                    if not out_summary["timed_out"]:
+                        summary_rows.append([sel_name, k_count, float(alpha), int(use_pf), out_summary["EM"], out_summary["F1"]])
 
     # 保存最终汇总 CSV（按 F1 降序）
-    final_csv = os.path.join(args.results_root, 'nq_hparam_search_summary.csv')
+    final_csv = os.path.join(args.results_root, 'nq_hparam_unified_summary.csv')
     summary_rows_sorted = sorted(summary_rows, key=lambda r: r[5], reverse=True)
     with open(final_csv, 'w', encoding='utf-8') as f:
-        f.write('selection,num_heads,alpha,use_probe_factor,EM,F1\n')
+        f.write('selection,num_heads,alpha/use_map,use_probe_factor,EM,F1\n')
         for row in summary_rows_sorted:
             f.write(','.join(map(str, row)) + '\n')
 

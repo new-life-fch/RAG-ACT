@@ -129,6 +129,7 @@ def main():
     parser.add_argument('--alpha', type=float, default=15.0, help='干预强度系数')
     parser.add_argument('--head_dim', type=int, default=128)
     parser.add_argument('--num_heads', type=int, default=None, help='若不传，将从特征维度推断')
+    parser.add_argument('--pf_gamma', type=float, default=1.0, help='可靠性因子幂次 γ，用于 (reliability^γ)')
     # 已保存的探针与top-k头、验证准确率
     parser.add_argument('--probes_path', type=str, required=True)
     parser.add_argument('--top_heads_path', type=str, required=True)
@@ -215,14 +216,36 @@ def main():
         else:
             start_idx = -1
 
+        # 解析层索引（model.layers.{i}.self_attn.head_out）
+        try:
+            layer_idx = int(str(layer_name).split('.')[2])
+        except Exception:
+            layer_idx = None
+
         for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
             direction_to_add = torch.tensor(direction).to(head_output.device)
+            # 动态分数：sigmoid(w·x + b)
+            try:
+                if layer_idx is not None:
+                    flat_idx = layer_idx * num_heads + head
+                    clf = probes[flat_idx]
+                    w = torch.tensor(clf.coef_.reshape(-1), dtype=direction_to_add.dtype).to(head_output.device)
+                    b = float(getattr(clf, 'intercept_', [0.0])[0])
+                    x_vec = head_output[:, -1, head, :]  # B x D（贪心通常 B=1）
+                    logit = (x_vec @ w) + b
+                    dynamic_score = torch.sigmoid(logit)  # B
+                else:
+                    dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=head_output.device)
+            except Exception:
+                dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=head_output.device)
+
+            # strength = alpha * proj_val_std * (1 - dynamic_score) * (reliability^γ)
+            reliability = float(probe_factor)
+            strength_base = args.alpha * proj_val_std * (reliability ** args.pf_gamma)
             if start_idx == -1:
-                head_output[:, -1, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-                # head_output[:, -1, head, :] += args.alpha * proj_val_std * direction_to_add
+                head_output[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
             else:
-                head_output[:, start_idx:, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
-                # head_output[:, start_idx:, head, :] += args.alpha * proj_val_std * direction_to_add
+                head_output[:, start_idx:, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
         head_output = rearrange(head_output, 'b s h d -> b s (h d)')
         return head_output
 

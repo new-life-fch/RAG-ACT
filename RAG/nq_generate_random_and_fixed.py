@@ -111,6 +111,7 @@ def main():
     parser.add_argument('--alpha', type=float, default=15.0, help='干预强度系数')
     parser.add_argument('--head_dim', type=int, default=128)
     parser.add_argument('--num_heads', type=int, default=None, help='若不传，将从特征维度推断')
+    parser.add_argument('--pf_gamma', type=float, default=1.0, help='可靠性因子幂次 γ，用于 (reliability^γ)')
     # 已保存的top-heads与探针（固定强度使用），随机方向也需要top-heads集合
     parser.add_argument('--top_heads_path', type=str, required=True)
     parser.add_argument('--probes_path', type=str, required=False, default=None)
@@ -172,12 +173,13 @@ def main():
     def make_lt_add(interventions):
         def lt_modulated_vector_add(head_output, layer_name, start_edit_location='lt'):
             ho = rearrange(head_output, 'b s (h d) -> b s h d', h=num_heads)
+            # 固定强度/随机方向：不使用动态分数，仅保留 reliability^γ（随机方向 reliability=1）
             for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
                 direction_to_add = torch.tensor(direction).to(ho.device)
                 if start_edit_location == 'lt':
-                    ho[:, -1, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
+                    ho[:, -1, head, :] += args.alpha * proj_val_std * (float(probe_factor) ** args.pf_gamma) * direction_to_add
                 else:
-                    ho[:, start_edit_location:, head, :] += args.alpha * proj_val_std * probe_factor * direction_to_add
+                    ho[:, start_edit_location:, head, :] += args.alpha * proj_val_std * (float(probe_factor) ** args.pf_gamma) * direction_to_add
             ho = rearrange(ho, 'b s h d -> b s (h d)')
             return ho
         return lt_modulated_vector_add
