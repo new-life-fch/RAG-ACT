@@ -8,6 +8,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import torch
 from zai import ZhipuAiClient
 from dotenv import load_dotenv
+import textwrap
 
 # 加载环境变量
 load_dotenv()
@@ -55,15 +56,24 @@ def generate_llama_answer(query, passages, pipe):
     reference_text = "\n\n".join([f"Document {i+1}: {passage['text']}" for i, passage in enumerate(passages)])
     
     # 构建提示词
-    system_prompt = ("Answer the question based on the given document. "
-                    "Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context. "
-                    "Just give the key information that directly answers the question.\n\n"
-                    "Example:\n"
-                    "Question: Where do the Great Lakes meet the ocean?\n"
-                    "Answer: the Saint Lawrence River\n\n"
-                    f"The following are given documents.\n\n{reference_text}")
-    
-    user_prompt = f"Question: {query}\nAnswer:"
+    system_prompt = textwrap.dedent('''
+        Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
+
+        Example:
+
+        The following are given document fragments.
+
+        Document 1: the case. Epithelia are classed as "tight" or "leaky", depending on the ability of the tight junctions to prevent water and solute movement: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a
+        
+        Document 2: adherens junctions. Tight junctions, or zona occludens, are the most important cellular element for the formation of semi-permeable barriers within or between tissues. Tight junctions primarily consist of claudins and occludins, which are membrane proteins that form the cell-cell contact, as well as ZO-1, ZO-2 and ZO-3, which link tight junctions to the actin cytoskeleton. However, tight junctions have not been found to be directly linked to stress fibers, like they are for focal adhesions and adherens junctions. Focal adhesions are macromolecular assemblies that are used to connect cells to the ECM. They consist of three functional layers: an ECM-associated
+        
+        Document 3: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a branching network of sealing strands, each strand acting independently from the others. Therefore, the efficiency of the junction in preventing ion passage increases
+
+        Question: In which group of animals are tight junctions found?
+        Answer: vertebrates
+    ''').strip()
+
+    user_prompt = f"The following are given document fragments.\n\n{reference_text}\n\nQuestion: {query}\nAnswer:"
     
     # 构建 Llama 3.1 的消息列表
     messages = [

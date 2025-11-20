@@ -20,9 +20,9 @@ def main():
     训练并筛选前 top-k 个探针，并保存到磁盘，便于后续实验复用。
 
     使用从 NQ 数据集生成的特征：
-    - `../RAG-llm/features/{model_name}_nq_labels.npy`
-    - `../RAG-llm/features/{model_name}_nq_head_wise.npy`
-    - `../RAG-llm/features/{model_name}_nq_tokens.pkl`（可选，分析定位用）
+    - `../RAG-llm/RAG/features/{model_name}_nq_labels.npy`
+    - `../RAG-llm/RAG/features/{model_name}_nq_head_wise.npy`
+    - `../RAG-llm/RAG/features/{model_name}_nq_tokens.pkl`（可选，分析定位用）
 
     处理流程：
     1. 加载 head-wise 激活并 reshape 为 `(B, L, H, D)`；
@@ -54,7 +54,7 @@ def main():
     np.random.seed(args.seed)
 
     # 路径准备
-    feat_dir = '../RAG-llm/features'
+    feat_dir = '../RAG-llm/RAG/features'
     labels_path = os.path.join(feat_dir, f'{args.model_name}_nq_labels.npy')
     head_path = os.path.join(feat_dir, f'{args.model_name}_nq_head_wise.npy')
 
@@ -139,7 +139,7 @@ def main():
         accs_to_save = accs_np.reshape(L, num_heads)
 
     # 保存探针与 top-k 结果
-    save_dir = './results_dump/probes'
+    save_dir = '../RAG-llm/RAG/results_dump/probes'
     os.makedirs(save_dir, exist_ok=True)
     base = f'{args.model_name}_nq_seed_{args.seed}_top_{args.top_k}'
     if args.num_fold and args.num_fold > 1:

@@ -5,6 +5,7 @@ import csv
 import pickle
 import time
 from typing import List, Tuple, Dict, Optional
+import textwrap
 
 import torch
 import numpy as np
@@ -18,6 +19,8 @@ from llama_utils import (
     _build_messages_input,
     get_interventions_dict,
     evaluate_nq_em_f1,
+    get_separated_activations_nq,
+    get_com_directions,
 )
 
 
@@ -64,16 +67,24 @@ def build_nq_generation_inputs(
                 docs_texts.append(text.strip())
 
         docs_block = "\n\n".join([f"Document {k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = (
-            "Answer the question based on the given document. "
-            "Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context. "
-            "Just give the key information that directly answers the question.\n\n"
-            "Example:\n"
-            "Question: when does nathan make it to the nba\n"
-            "Answer: season 6 finale\n\n"
-            f"The following are given documents.\n\n{docs_block}"
-        )
-        user_prompt = f"Question: {question}\nAnswer:"
+        system_prompt = textwrap.dedent('''
+            Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
+
+            Example:
+
+            The following are given document fragments.
+
+            Document 1: the case. Epithelia are classed as "tight" or "leaky", depending on the ability of the tight junctions to prevent water and solute movement: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a
+            
+            Document 2: adherens junctions. Tight junctions, or zona occludens, are the most important cellular element for the formation of semi-permeable barriers within or between tissues. Tight junctions primarily consist of claudins and occludins, which are membrane proteins that form the cell-cell contact, as well as ZO-1, ZO-2 and ZO-3, which link tight junctions to the actin cytoskeleton. However, tight junctions have not been found to be directly linked to stress fibers, like they are for focal adhesions and adherens junctions. Focal adhesions are macromolecular assemblies that are used to connect cells to the ECM. They consist of three functional layers: an ECM-associated
+            
+            Document 3: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a branching network of sealing strands, each strand acting independently from the others. Therefore, the efficiency of the junction in preventing ion passage increases
+
+            Question: In which group of animals are tight junctions found?
+            Answer: vertebrates
+        ''').strip()
+
+        user_prompt = f"The following are given document fragments.\n\n{docs_block}\n\nQuestion: {question}\nAnswer:"
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
         inputs.append(input_ids)
@@ -197,11 +208,12 @@ def run_intervention(
     head_dim: int,
     num_heads: Optional[int],
     use_probe_factor: bool,
-    use_proj_val_std: bool,
     val_accs: Optional[np.ndarray],
     max_new_tokens: int,
     timeout_minutes: Optional[float] = None,
     alpha_per_layer: Optional[Dict[int, float]] = None,
+    com_directions: Optional[np.ndarray] = None,
+    pf_gamma: float = 1.0,
 ) -> Tuple[List[str], Dict[str, float]]:
     B, L, HD = tuning_headwise.shape
     if num_heads is None:
@@ -219,9 +231,9 @@ def run_intervention(
         probes,
         tuning_sep,
         num_heads_calc,
-        use_center_of_mass=False,
+        use_center_of_mass=True,
         use_random_dir=False,
-        com_directions=None,
+        com_directions=com_directions,
         probe_score_map=probe_score_map,
     )
 
@@ -239,13 +251,26 @@ def run_intervention(
             alpha_cur = alpha
             if (alpha_per_layer is not None) and (layer_idx is not None) and (layer_idx in alpha_per_layer):
                 alpha_cur = alpha_per_layer[layer_idx]
-            proj_mult = (proj_val_std if use_proj_val_std else 1.0)
+            proj_mult = proj_val_std
             reliability = float(probe_factor)
-            strength = alpha_cur * proj_mult * (reliability ** args.pf_gamma)
+            try:
+                if layer_idx is not None:
+                    flat_idx = layer_idx * num_heads_calc + head
+                    clf = probes[flat_idx]
+                    w = torch.tensor(clf.coef_.reshape(-1), dtype=direction_to_add.dtype).to(h_out.device)
+                    b = float(getattr(clf, 'intercept_', [0.0])[0])
+                    x_vec = h_out[:, -1, head, :]
+                    logit = (x_vec @ w) + b
+                    dynamic_score = torch.sigmoid(logit)
+                else:
+                    dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=h_out.device)
+            except Exception:
+                dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=h_out.device)
+            strength_base = alpha_cur * proj_mult * (reliability ** pf_gamma)
             if start_idx == -1:
-                h_out[:, -1, head, :] += strength * direction_to_add
+                h_out[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
             else:
-                h_out[:, start_idx:, head, :] += strength * direction_to_add
+                h_out[:, start_idx:, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
         return rearrange(h_out, 'b s h d -> b s (h d)')
 
     preds: List[str] = []
@@ -332,11 +357,13 @@ def main():
     parser.add_argument('--num_heads', type=int, default=None)
     parser.add_argument('--probes_path', type=str, required=True)
     parser.add_argument('--val_accs_path', type=str, required=True)
-    parser.add_argument('--tuning_headwise_path', type=str, default='../features/llama2_chat_7B_nq_head_wise.npy')
+    parser.add_argument('--tuning_headwise_path', type=str, default='./RAG/features/llama2_chat_7B_nq_head_wise.npy')
+    parser.add_argument('--tuning_labels_path', type=str, default='./RAG/features/llama2_chat_7B_nq_labels.npy')
     parser.add_argument('--scores_csv', type=str, required=True)
     parser.add_argument('--saved_top_heads_path', type=str, default=None)
     parser.add_argument('--max_new_tokens', type=int, default=256)
-    parser.add_argument('--results_root', type=str, default='./results_dump/llama-2-7b-instruct-unified')
+    parser.add_argument('--results_root', type=str, default='./RAG/results_dump/llama-2-7b-instruct-unified')
+    parser.add_argument('--pf_gamma', type=float, default=1.0)
 
     # 选择策略与过滤
     parser.add_argument('--include_strategies', type=str, default=None,
@@ -349,15 +376,13 @@ def main():
                         help='干预强度列表或范围：逗号列表或 range:start:stop:step')
     parser.add_argument('--probe_factor_modes', type=str, default='both', choices=['both','true','false'],
                         help='是否乘探针分数：both/true/false')
-    parser.add_argument('--use_proj_val_std', action='store_true',
-                        help='启用 proj_val_std 作为强度乘子（默认不启用）')
 
     # 复合方案与运行控制
     parser.add_argument('--composites', type=str, default=None,
                         help='逗号分隔的复合强度方案（alphamap），例如: 0-9=5+20-31=15,0-9=5+10-19=10+20-31=15')
     parser.add_argument('--composites_only', action='store_true',
                         help='仅运行复合方案（不跑单策略）')
-    parser.add_argument('--timeout_minutes', type=float, default=6.0,
+    parser.add_argument('--timeout_minutes', type=float, default=15.0,
                         help='单次实验的最长运行时间（分钟），超过则中断并进入下一组参数')
     parser.add_argument('--skip_if_exists', action='store_true',
                         help='若当前实验的 summary 文件已存在则跳过执行')
@@ -410,8 +435,25 @@ def main():
         probes = pickle.load(f)
     val_accs = np.load(args.val_accs_path)  # (L, H)
     tuning_headwise = np.load(args.tuning_headwise_path)  # (B, L, H*D)
+    tuning_labels = np.load(args.tuning_labels_path)
     scores = load_scores_csv(args.scores_csv)
     L, H = infer_LH_from_scores(scores)
+
+    # 计算质心均值偏移方向（复用 llama_utils）
+    B_th, L_th, HD_th = tuning_headwise.shape
+    if args.num_heads is None:
+        if HD_th % args.head_dim != 0:
+            raise ValueError('无法从特征维推断 num_heads，请显式传入 --num_heads')
+        num_heads_calc = HD_th // args.head_dim
+    else:
+        num_heads_calc = args.num_heads
+        
+    tuning_sep = rearrange(tuning_headwise, 'b l (h d) -> b l h d', h=num_heads_calc, d=args.head_dim)
+    num_questions = B_th // 2
+    separated_head, separated_labels, _ = get_separated_activations_nq(tuning_labels, tuning_sep, num_questions)
+    train_set_idxs = np.arange(num_questions)
+    val_set_idxs = np.array([], dtype=int)
+    com_directions = get_com_directions(L_th, num_heads_calc, train_set_idxs, val_set_idxs, separated_head, separated_labels)
 
     saved_top_heads = None
     if args.saved_top_heads_path:
@@ -491,8 +533,9 @@ def main():
                 preds, summary = run_intervention(
                     model, tokenizer, device, inputs, gold_answers_list,
                     0.0, comp_name, unique_heads, probes, tuning_headwise,
-                    args.head_dim, args.num_heads, use_pf, args.use_proj_val_std,
+                    args.head_dim, args.num_heads, use_pf, 
                     val_accs, args.max_new_tokens, args.timeout_minutes, alpha_map,
+                    com_directions=com_directions, pf_gamma=args.pf_gamma,
                 )
                 ans_path = os.path.join(ans_dir, f"nq_unified_{comp_name}_alphamap_{alpha_tag}_pf{int(use_pf)}_answers.jsonl")
                 with open(ans_path, 'w', encoding='utf-8') as f:
@@ -538,8 +581,9 @@ def main():
                     preds, summary = run_intervention(
                         model, tokenizer, device, inputs, gold_answers_list,
                         float(alpha), sel_name, unique_heads, probes, tuning_headwise,
-                        args.head_dim, args.num_heads, use_pf, args.use_proj_val_std,
+                        args.head_dim, args.num_heads, use_pf, 
                         val_accs, args.max_new_tokens, args.timeout_minutes, None,
+                        com_directions=com_directions, pf_gamma=args.pf_gamma,
                     )
 
                     ans_path = os.path.join(ans_dir, f"nq_unified_{sel_name}_alpha{alpha}_pf{int(use_pf)}_answers.jsonl")
@@ -586,3 +630,17 @@ def main():
 
 if __name__ == '__main__':
     main()
+    # 计算质心均值偏移方向（复用 llama_utils）
+    B_th, L_th, HD_th = tuning_headwise.shape
+    if args.num_heads is None:
+        if HD_th % args.head_dim != 0:
+            raise ValueError('无法从特征维推断 num_heads，请显式传入 --num_heads')
+        num_heads_calc = HD_th // args.head_dim
+    else:
+        num_heads_calc = args.num_heads
+    tuning_sep = rearrange(tuning_headwise, 'b l (h d) -> b l h d', h=num_heads_calc, d=args.head_dim)
+    num_questions = B_th // 2
+    separated_head, separated_labels, _ = get_separated_activations_nq(tuning_labels, tuning_sep, num_questions)
+    train_set_idxs = np.arange(num_questions)
+    val_set_idxs = np.array([], dtype=int)
+    com_directions = get_com_directions(L_th, num_heads_calc, train_set_idxs, val_set_idxs, separated_head, separated_labels)

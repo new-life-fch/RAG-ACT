@@ -21,17 +21,8 @@ from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 import os
 
 HF_NAMES = {
-    # 'llama_7B': 'baffo32/decapoda-research-llama-7B-hf',
-    'llama_7B': 'huggyllama/llama-7b',
-    'alpaca_7B': 'circulus/alpaca-7b', 
-    'vicuna_7B': 'AlekseyKorshuk/vicuna-7b', 
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf', 
-    'llama2_chat_13B': 'meta-llama/Llama-2-13b-chat-hf', 
-    'llama2_chat_70B': 'meta-llama/Llama-2-70b-chat-hf', 
-    'llama3_8B': 'meta-llama/Meta-Llama-3-8B',
     'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct',
-    'llama3_70B': 'meta-llama/Meta-Llama-3-70B',
-    'llama3_70B_instruct': 'meta-llama/Meta-Llama-3-70B-Instruct'
 }
 
 def main(): 
@@ -49,7 +40,7 @@ def main():
 # NQ (RAG) 数据集支持
 # =====================
     # 默认路径定位到当前脚本同目录下的 new_dataset.jsonl
-    default_nq_path = os.path.join(os.path.dirname(__file__), 'new_dataset.jsonl')
+    default_nq_path = os.path.join(os.path.dirname(__file__), 'data/llama_2_chat_7b_train.jsonl')
     parser.add_argument('--nq_jsonl', type=str, default=default_nq_path, help='NQ 格式数据集路径（当 dataset_name=nq 时生效）')
     parser.add_argument('--nq_max_samples', type=int, default=None, help='NQ：仅处理指定数量的样本')
     parser.add_argument('--nq_max_docs', type=int, default=None, help='NQ：每条样本使用的检索片段数量上限')
@@ -110,10 +101,10 @@ def main():
             max_docs=args.nq_max_docs,
             use_chat_template=args.use_chat_template,
         )
-        os.makedirs('../RAG-llm/features', exist_ok=True)
-        with open(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_categories.pkl', 'wb') as f:
+        os.makedirs('../RAG-llm/RAG/features', exist_ok=True)
+        with open(f'../RAG-llm/RAG/features/{args.model_name}_{args.dataset_name}_categories.pkl', 'wb') as f:
             pickle.dump(categories, f)
-        with open(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_tokens.pkl', 'wb') as f:
+        with open(f'../RAG-llm/RAG/features/{args.model_name}_{args.dataset_name}_tokens.pkl', 'wb') as f:
             pickle.dump(tokens, f)
     else:
         raise ValueError("Invalid dataset name")
@@ -131,13 +122,13 @@ def main():
         all_head_wise_activations.append(head_wise_activations[:,-1,:].copy())
 
     print("Saving labels")
-    np.save(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_labels.npy', labels)
+    np.save(f'../RAG-llm/RAG/features/{args.model_name}_{args.dataset_name}_labels.npy', labels)
 
     print("Saving layer wise activations")
-    np.save(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_layer_wise.npy', all_layer_wise_activations)
+    np.save(f'../RAG-llm/RAG/features/{args.model_name}_{args.dataset_name}_layer_wise.npy', all_layer_wise_activations)
     
     print("Saving head wise activations")
-    np.save(f'../RAG-llm/features/{args.model_name}_{args.dataset_name}_head_wise.npy', all_head_wise_activations)
+    np.save(f'../RAG-llm/RAG/features/{args.model_name}_{args.dataset_name}_head_wise.npy', all_head_wise_activations)
 
 if __name__ == '__main__':
     main()

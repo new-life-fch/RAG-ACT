@@ -17,7 +17,10 @@ from llama_utils import (
     _build_messages_input,
     get_interventions_dict,
     evaluate_nq_em_f1,
+    get_separated_activations_nq,
+    get_com_directions,
 )
+import textwrap
 
 
 HF_NAMES = {
@@ -75,23 +78,24 @@ def build_nq_generation_inputs(
 
         # 系统/用户提示词（强调只输出直接答案）
         docs_block = "\n\n".join([f"Document {k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = (
-            "Answer the question based on the given document. "
-            "Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context. "
-            "Just give the key information that directly answers the question.\n\n"
-            "Example:\n"
-            "Question: when does nathan make it to the nba\n"
-            "Answer: season 6 finale\n\n"
-            f"The following are given documents.\n\n{docs_block}"
-        )
+        system_prompt = textwrap.dedent('''
+            Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
 
-        # system_prompt = (
-        #     "Answer the question based on the given document. "
-        #     "Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context. "
-        #     "Just give the key information that directly answers the question.\n\n"
-        #     f"The following are given documents.\n\n{docs_block}"
-        # )
-        user_prompt = f"Question: {question}\nAnswer:"
+            Example:
+
+            The following are given document fragments.
+
+            Document 1: the case. Epithelia are classed as "tight" or "leaky", depending on the ability of the tight junctions to prevent water and solute movement: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a
+            
+            Document 2: adherens junctions. Tight junctions, or zona occludens, are the most important cellular element for the formation of semi-permeable barriers within or between tissues. Tight junctions primarily consist of claudins and occludins, which are membrane proteins that form the cell-cell contact, as well as ZO-1, ZO-2 and ZO-3, which link tight junctions to the actin cytoskeleton. However, tight junctions have not been found to be directly linked to stress fibers, like they are for focal adhesions and adherens junctions. Focal adhesions are macromolecular assemblies that are used to connect cells to the ECM. They consist of three functional layers: an ECM-associated
+            
+            Document 3: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a branching network of sealing strands, each strand acting independently from the others. Therefore, the efficiency of the junction in preventing ion passage increases
+
+            Question: In which group of animals are tight junctions found?
+            Answer: vertebrates
+        ''').strip()
+
+        user_prompt = f"The following are given document fragments.\n\n{docs_block}\n\nQuestion: {question}\nAnswer:"
 
         # 注意：生成阶段不提供助手答案
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
@@ -132,16 +136,17 @@ def main():
     parser.add_argument('--pf_gamma', type=float, default=1.0, help='可靠性因子幂次 γ，用于 (reliability^γ)')
     # 已保存的探针与top-k头、验证准确率
     parser.add_argument('--probes_path', type=str, required=True)
-    parser.add_argument('--top_heads_path', type=str, required=True)
+    parser.add_argument('--top_heads_path', type=str, default=None)
     parser.add_argument('--val_accs_path', type=str, required=True)
+    parser.add_argument('--select_top_k', type=int, default=48)
     # 用于计算 proj_val_std 的激活（推荐使用 NQ 收集的激活）
-    parser.add_argument('--tuning_headwise_path', type=str, default='../features/llama2_chat_7B_nq_head_wise.npy')
-    parser.add_argument('--tuning_labels_path', type=str, default='../features/llama2_chat_7B_nq_labels.npy')
+    parser.add_argument('--tuning_headwise_path', type=str, default='./RAG/features/llama2_chat_7B_nq_head_wise.npy')
+    parser.add_argument('--tuning_labels_path', type=str, default='./RAG/features/llama2_chat_7B_nq_labels.npy')
     # 输出路径（同时评估标准RAG与探针干预RAG）
-    parser.add_argument('--save_answers_baseline_path', type=str, default='./results_dump/llama-2-7b-instruct/answer_dump/nq_gen_answers_baseline.jsonl')
-    parser.add_argument('--save_summary_baseline_path', type=str, default='./results_dump/llama-2-7b-instruct/summary_dump/nq_gen_summary_baseline.json')
-    parser.add_argument('--save_answers_intervene_path', type=str, default='./results_dump/llama-2-7b-instruct/answer_dump/nq_gen_answers_intervene.jsonl')
-    parser.add_argument('--save_summary_intervene_path', type=str, default='./results_dump/llama-2-7b-instruct/summary_dump/nq_gen_summary_intervene.json')
+    parser.add_argument('--save_answers_baseline_path', type=str, default='./RAG/results_dump/main/llama-2-7b-instruct/answer_dump/nq_gen_answers_baseline.jsonl')
+    parser.add_argument('--save_summary_baseline_path', type=str, default='./RAG/results_dump/main/llama-2-7b-instruct/summary_dump/nq_gen_summary_baseline.json')
+    parser.add_argument('--save_answers_intervene_path', type=str, default='./RAG/results_dump/main/llama-2-7b-instruct/answer_dump/nq_gen_answers_intervene.jsonl')
+    parser.add_argument('--save_summary_intervene_path', type=str, default='./RAG/results_dump/main/llama-2-7b-instruct/summary_dump/nq_gen_summary_intervene.json')
     parser.add_argument('--max_new_tokens', type=int, default=256, help='生成最大新token数（贪心解码）')
     args = parser.parse_args()
 
@@ -169,15 +174,23 @@ def main():
         sample_seed=args.sample_seed,
     )
 
-    # 加载 top-k 探针与验证准确率（作为探针分数因子）
     with open(args.probes_path, 'rb') as f:
         probes = pickle.load(f)
-    with open(args.top_heads_path, 'rb') as f:
-        top_heads = pickle.load(f)  # List[Tuple[layer, head]]
-    val_accs = np.load(args.val_accs_path)  # shape (L, H)
+    val_accs = np.load(args.val_accs_path)
+    L_va, H_va = val_accs.shape
+    if args.top_heads_path:
+        with open(args.top_heads_path, 'rb') as f:
+            top_heads = pickle.load(f)
+    else:
+        if args.select_top_k is None or args.select_top_k <= 0:
+            top_heads = [(l, h) for l in range(L_va) for h in range(H_va)]
+        else:
+            scores_flat = val_accs.reshape(L_va * H_va)
+            idxs = np.argsort(scores_flat)[::-1][:args.select_top_k]
+            top_heads = [(i // H_va, i % H_va) for i in idxs]
 
     # 加载用于计算 proj_val_std 的 head-wise 激活，并 reshape 为 (B, L, H, D)
-    tuning_headwise = np.load(args.tuning_headwise_path)  # (B, L, H*D)
+    tuning_headwise = np.load(args.tuning_headwise_path)
     B, L, HD = tuning_headwise.shape
     if args.num_heads is None:
         if HD % args.head_dim != 0:
@@ -186,17 +199,23 @@ def main():
     else:
         num_heads = args.num_heads
     tuning_headwise = rearrange(tuning_headwise, 'b l (h d) -> b l h d', h=num_heads, d=args.head_dim)
+    tuning_labels = np.load(args.tuning_labels_path)
+    num_questions = B // 2
+    separated_head, separated_labels, _ = get_separated_activations_nq(tuning_labels, tuning_headwise, num_questions)
+    train_set_idxs = np.arange(num_questions)
+    val_set_idxs = np.array([], dtype=int)
+    com_directions = get_com_directions(L, num_heads, train_set_idxs, val_set_idxs, separated_head, separated_labels)
 
     # 构造干预字典（包含探针分数因子）
-    probe_score_map = val_accs  # (L, H)
+    probe_score_map = val_accs
     interventions = get_interventions_dict(
         top_heads,
         probes,
         tuning_headwise,
         num_heads,
-        use_center_of_mass=False,
+        use_center_of_mass=True,
         use_random_dir=False,
-        com_directions=None,
+        com_directions=com_directions,
         probe_score_map=probe_score_map,
     )
 
@@ -243,9 +262,11 @@ def main():
             reliability = float(probe_factor)
             strength_base = args.alpha * proj_val_std * (reliability ** args.pf_gamma)
             if start_idx == -1:
-                head_output[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+                # head_output[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+                head_output[:, -1, head, :] += strength_base * direction_to_add
             else:
-                head_output[:, start_idx:, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+                # head_output[:, start_idx:, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+                head_output[:, start_idx:, head, :] += strength_base * direction_to_add
         head_output = rearrange(head_output, 'b s h d -> b s (h d)')
         return head_output
 

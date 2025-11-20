@@ -16,11 +16,14 @@ from llama_utils import (
     _build_messages_input,
     get_interventions_dict,
     evaluate_nq_em_f1,
+    get_separated_activations_nq,
+    get_com_directions,
 )
+import textwrap
 
 
 HF_NAMES = {
-    'llama2_chat_7B': 'meta-llama/Llama-2-7b-chat-hf',
+    'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
     'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct',
 }
 
@@ -71,16 +74,24 @@ def build_nq_generation_inputs(
 
         # 系统/用户提示词（强调只输出直接答案）
         docs_block = "\n\n".join([f"Document {k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = (
-            "Answer the question based on the given document. "
-            "Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context. "
-            "Just give the key information that directly answers the question.\n\n"
-            "Example:\n"
-            "Question: Where do the Great Lakes meet the ocean?\n"
-            "Answer: the Saint Lawrence River\n\n"
-            f"The following are given documents.\n\n{docs_block}"
-        )
-        user_prompt = f"Question: {question}\nAnswer:"
+        system_prompt = textwrap.dedent('''
+            Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
+
+            Example:
+
+            The following are given document fragments.
+
+            Document 1: the case. Epithelia are classed as "tight" or "leaky", depending on the ability of the tight junctions to prevent water and solute movement: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a
+            
+            Document 2: adherens junctions. Tight junctions, or zona occludens, are the most important cellular element for the formation of semi-permeable barriers within or between tissues. Tight junctions primarily consist of claudins and occludins, which are membrane proteins that form the cell-cell contact, as well as ZO-1, ZO-2 and ZO-3, which link tight junctions to the actin cytoskeleton. However, tight junctions have not been found to be directly linked to stress fibers, like they are for focal adhesions and adherens junctions. Focal adhesions are macromolecular assemblies that are used to connect cells to the ECM. They consist of three functional layers: an ECM-associated
+            
+            Document 3: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a branching network of sealing strands, each strand acting independently from the others. Therefore, the efficiency of the junction in preventing ion passage increases
+
+            Question: In which group of animals are tight junctions found?
+            Answer: vertebrates
+        ''').strip()
+
+        user_prompt = f"The following are given document fragments.\n\n{docs_block}\n\nQuestion: {question}\nAnswer:"
 
         # 注意：生成阶段不提供助手答案
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
@@ -114,13 +125,15 @@ def main():
     parser.add_argument('--pf_gamma', type=float, default=1.0, help='可靠性因子幂次 γ，用于 (reliability^γ)')
     # 已保存的top-heads与探针（固定强度使用），随机方向也需要top-heads集合
     parser.add_argument('--top_heads_path', type=str, required=True)
-    parser.add_argument('--probes_path', type=str, required=False, default=None)
+    parser.add_argument('--probes_path', type=str, required=True)
     # 用于计算 proj_val_std 的激活（推荐使用 NQ 收集的激活）
-    parser.add_argument('--tuning_headwise_path', type=str, default='../features/llama2_chat_7B_nq_head_wise.npy')
-    parser.add_argument('--save_answers_random_path', type=str, default='./results_dump/answer_dump/nq_gen_answers_random_dir.jsonl')
-    parser.add_argument('--save_summary_random_path', type=str, default='./results_dump/summary_dump/nq_gen_summary_random_dir.json')
-    parser.add_argument('--save_answers_fixed_path', type=str, default='./results_dump/answer_dump/nq_gen_answers_fixed_strength.jsonl')
-    parser.add_argument('--save_summary_fixed_path', type=str, default='./results_dump/summary_dump/nq_gen_summary_fixed_strength.json')
+    parser.add_argument('--tuning_headwise_path', type=str, default='./RAG/features/llama2_chat_7B_nq_head_wise.npy')
+    parser.add_argument('--tuning_labels_path', type=str, default='./RAG/features/llama2_chat_7B_nq_labels.npy')
+    parser.add_argument('--val_accs_path', type=str, default='./RAG/results_dump/probes/llama_7B_nq_seed_42_top_48_val_accs.npy')
+    parser.add_argument('--save_answers_random_path', type=str, default='./RAG/results_dump/answer_dump/nq_gen_answers_random_dir.jsonl')
+    parser.add_argument('--save_summary_random_path', type=str, default='./RAG/results_dump/summary_dump/nq_gen_summary_random_dir.json')
+    parser.add_argument('--save_answers_fixed_path', type=str, default='./RAG/results_dump/answer_dump/nq_gen_answers_fixed_strength.jsonl')
+    parser.add_argument('--save_summary_fixed_path', type=str, default='./RAG/results_dump/summary_dump/nq_gen_summary_fixed_strength.json')
     parser.add_argument('--max_new_tokens', type=int, default=256, help='生成最大新token数（贪心解码）')
     args = parser.parse_args()
 
@@ -163,23 +176,39 @@ def main():
         num_heads = args.num_heads
     tuning_headwise = rearrange(tuning_headwise, 'b l (h d) -> b l h d', h=num_heads, d=args.head_dim)
 
-    # 若固定强度使用探针方向，需要加载 probes
-    probes = None
-    if args.probes_path is not None:
-        with open(args.probes_path, 'rb') as f:
-            probes = pickle.load(f)
+    with open(args.probes_path, 'rb') as f:
+        probes = pickle.load(f)
+    val_accs = np.load(args.val_accs_path)
 
     # 构造干预函数
     def make_lt_add(interventions):
         def lt_modulated_vector_add(head_output, layer_name, start_edit_location='lt'):
             ho = rearrange(head_output, 'b s (h d) -> b s h d', h=num_heads)
-            # 固定强度/随机方向：不使用动态分数，仅保留 reliability^γ（随机方向 reliability=1）
+            try:
+                layer_idx = int(str(layer_name).split('.')[2])
+            except Exception:
+                layer_idx = None
             for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
                 direction_to_add = torch.tensor(direction).to(ho.device)
+                try:
+                    if layer_idx is not None:
+                        flat_idx = layer_idx * num_heads + head
+                        clf = probes[flat_idx]
+                        w = torch.tensor(clf.coef_.reshape(-1), dtype=direction_to_add.dtype).to(ho.device)
+                        b = float(getattr(clf, 'intercept_', [0.0])[0])
+                        x_vec = ho[:, -1, head, :]
+                        logit = (x_vec @ w) + b
+                        dynamic_score = torch.sigmoid(logit)
+                    else:
+                        dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=ho.device)
+                except Exception:
+                    dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=ho.device)
+                reliability = float(probe_factor)
+                strength_base = args.alpha * proj_val_std * (reliability ** args.pf_gamma)
                 if start_edit_location == 'lt':
-                    ho[:, -1, head, :] += args.alpha * proj_val_std * (float(probe_factor) ** args.pf_gamma) * direction_to_add
+                    ho[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
                 else:
-                    ho[:, start_edit_location:, head, :] += args.alpha * proj_val_std * (float(probe_factor) ** args.pf_gamma) * direction_to_add
+                    ho[:, start_edit_location:, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
             ho = rearrange(ho, 'b s h d -> b s (h d)')
             return ho
         return lt_modulated_vector_add
@@ -207,28 +236,33 @@ def main():
     # 干预字典：随机方向（probe_factor固定为1.0）
     interventions_random = get_interventions_dict(
         top_heads,
-        probes,  # 未使用
+        probes,
         tuning_headwise,
         num_heads,
         use_center_of_mass=False,
         use_random_dir=True,
         com_directions=None,
-        probe_score_map=None,
+        probe_score_map=val_accs,
     )
     lt_add_random = make_lt_add(interventions_random)
 
     # 干预字典：固定强度（探针方向，无探针分数因子）
-    if probes is None:
-        raise ValueError('固定强度需要提供 --probes_path 以加载探针方向')
+    tuning_labels = np.load(args.tuning_labels_path)
+    num_questions = B // 2
+    separated_head, separated_labels, _ = get_separated_activations_nq(tuning_labels, tuning_headwise, num_questions)
+    train_set_idxs = np.arange(num_questions)
+    val_set_idxs = np.array([], dtype=int)
+    com_directions = get_com_directions(L, num_heads, train_set_idxs, val_set_idxs, separated_head, separated_labels)
+
     interventions_fixed = get_interventions_dict(
         top_heads,
         probes,
         tuning_headwise,
         num_heads,
-        use_center_of_mass=False,
+        use_center_of_mass=True,
         use_random_dir=False,
-        com_directions=None,
-        probe_score_map=None,  # 禁用探针分数因子
+        com_directions=com_directions,
+        probe_score_map=val_accs,
     )
     lt_add_fixed = make_lt_add(interventions_fixed)
 
