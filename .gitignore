@@ -7,3 +7,5 @@ results_dump/
 llama/
 FlashRAG/
 results_dump copy/
+results_dump_dynamic/
+features_dynamic/

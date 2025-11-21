@@ -2,3 +2,5 @@ data/
 new_dataset.jsonl
 __pycache__/
 .ipynb_checkpoints/
+results_dump_dynamic
+features_dynamic

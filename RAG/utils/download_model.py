@@ -23,10 +23,10 @@ except Exception as e:
 
 
 # 模型名称
-repo_id = "meta-llama/Llama-2-7b-chat-hf"
+repo_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 
 # 本地保存路径
-local_dir = "/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf"    
+local_dir = "/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct"    
 os.makedirs(local_dir, exist_ok=True)
 
 print(f"⬇️ 正在从官方 Hugging Face 下载模型 '{repo_id}' 到 '{local_dir}'...")

@@ -78,24 +78,16 @@ def build_nq_generation_inputs(
 
         # 系统/用户提示词（强调只输出直接答案）
         docs_block = "\n\n".join([f"Document {k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = textwrap.dedent('''
-            Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
+        system_prompt = textwrap.dedent(f'''
+Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
 
-            Example:
+The following are given document fragments.
+        
+{docs_block}
 
-            The following are given document fragments.
+''').strip()
 
-            Document 1: the case. Epithelia are classed as "tight" or "leaky", depending on the ability of the tight junctions to prevent water and solute movement: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a
-            
-            Document 2: adherens junctions. Tight junctions, or zona occludens, are the most important cellular element for the formation of semi-permeable barriers within or between tissues. Tight junctions primarily consist of claudins and occludins, which are membrane proteins that form the cell-cell contact, as well as ZO-1, ZO-2 and ZO-3, which link tight junctions to the actin cytoskeleton. However, tight junctions have not been found to be directly linked to stress fibers, like they are for focal adhesions and adherens junctions. Focal adhesions are macromolecular assemblies that are used to connect cells to the ECM. They consist of three functional layers: an ECM-associated
-            
-            Document 3: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a branching network of sealing strands, each strand acting independently from the others. Therefore, the efficiency of the junction in preventing ion passage increases
-
-            Question: In which group of animals are tight junctions found?
-            Answer: vertebrates
-        ''').strip()
-
-        user_prompt = f"The following are given document fragments.\n\n{docs_block}\n\nQuestion: {question}\nAnswer:"
+        user_prompt = f"Question: {question}\nAnswer:"
 
         # 注意：生成阶段不提供助手答案
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
@@ -258,9 +250,9 @@ def main():
             except Exception:
                 dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=head_output.device)
 
-            # strength = alpha * proj_val_std * (1 - dynamic_score) * (reliability^γ)
             reliability = float(probe_factor)
             strength_base = args.alpha * proj_val_std * (reliability ** args.pf_gamma)
+            # strength_base = args.alpha * proj_val_std
             if start_idx == -1:
                 # head_output[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
                 head_output[:, -1, head, :] += strength_base * direction_to_add
@@ -288,13 +280,13 @@ def main():
                 s = s.split('Answer:')[1].strip()
             except Exception:
                 pass
+        s = s.split('\n')[0].strip()
         return s
 
+    layers_to_intervene = list(interventions.keys())
     with torch.no_grad():
-        for input_ids, golds in tqdm(zip(inputs, gold_answers_list), total=len(inputs), desc='nq_generate'):
+        for input_ids in tqdm(inputs, total=len(inputs), desc='baseline_generate'):
             input_ids = input_ids.to(device)
-
-            # 标准RAG（无干预，贪心解码）
             gen_tokens_base = model.generate(
                 input_ids,
                 do_sample=False,
@@ -305,8 +297,8 @@ def main():
             gen_str_base = tokenizer.decode(gen_tokens_base[0], skip_special_tokens=True)
             preds_baseline.append(_clean_answer_text(gen_str_base))
 
-            # 探针干预RAG（前48头，带探针分数因子）
-            layers_to_intervene = list(interventions.keys())
+        for input_ids in tqdm(inputs, total=len(inputs), desc='intervene_generate'):
+            input_ids = input_ids.to(device)
             with TraceDict(model, layers_to_intervene, edit_output=lt_modulated_vector_add):
                 gen_tokens_itv = model.generate(
                     input_ids,

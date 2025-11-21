@@ -67,24 +67,25 @@ def build_nq_generation_inputs(
                 docs_texts.append(text.strip())
 
         docs_block = "\n\n".join([f"Document {k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = textwrap.dedent('''
-            Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
+        system_prompt = textwrap.dedent(f'''
+Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
 
-            Example:
+The following are given document fragments.
+        
+{docs_block}
 
-            The following are given document fragments.
+''').strip()
 
-            Document 1: the case. Epithelia are classed as "tight" or "leaky", depending on the ability of the tight junctions to prevent water and solute movement: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a
-            
-            Document 2: adherens junctions. Tight junctions, or zona occludens, are the most important cellular element for the formation of semi-permeable barriers within or between tissues. Tight junctions primarily consist of claudins and occludins, which are membrane proteins that form the cell-cell contact, as well as ZO-1, ZO-2 and ZO-3, which link tight junctions to the actin cytoskeleton. However, tight junctions have not been found to be directly linked to stress fibers, like they are for focal adhesions and adherens junctions. Focal adhesions are macromolecular assemblies that are used to connect cells to the ECM. They consist of three functional layers: an ECM-associated
-            
-            Document 3: Tight junction Tight junctions, also known as occluding junctions or zonulae occludentes (singular, zonula occludens) are multiprotein junctional complexes whose general function is to prevent leakage of transported solutes and water and seals the paracellular pathway. Tight junctions may also serve as leaky pathways by forming selective channels for small cations, anions, or water. Tight junctions are present only in vertebrates. The corresponding junctions that occur in invertebrates are septate junctions. Tight junctions are composed of a branching network of sealing strands, each strand acting independently from the others. Therefore, the efficiency of the junction in preventing ion passage increases
+#         system_prompt = textwrap.dedent(f'''
+# Answer the question based strictly on the provided document fragments. 
 
-            Question: In which group of animals are tight junctions found?
-            Answer: vertebrates
-        ''').strip()
+# The following are given document fragments.
+        
+# {docs_block}
 
-        user_prompt = f"The following are given document fragments.\n\n{docs_block}\n\nQuestion: {question}\nAnswer:"
+# ''').strip()
+
+        user_prompt = f"Question: {question}\nAnswer:"
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
         inputs.append(input_ids)
@@ -141,7 +142,7 @@ def make_selection_strategies(
     strategies['all_heads'] = [(l, h) for (l, h, s) in scores]
 
     # 全局 top-k
-    for k in [64, 128, 256, 512]:
+    for k in [24, 48, 64, 128, 256, 512]:
         kk = min(k, len(by_score))
         strategies[f'topk_{kk}_by_score'] = [(l, h) for (l, h, s) in by_score[:kk]]
 
@@ -268,9 +269,11 @@ def run_intervention(
                 dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=h_out.device)
             strength_base = alpha_cur * proj_mult * (reliability ** pf_gamma)
             if start_idx == -1:
-                h_out[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+                # h_out[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+                h_out[:, -1, head, :] += strength_base * direction_to_add
             else:
-                h_out[:, start_idx:, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+                # h_out[:, start_idx:, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+                h_out[:, start_idx:, head, :] += strength_base * direction_to_add
         return rearrange(h_out, 'b s h d -> b s (h d)')
 
     preds: List[str] = []
@@ -630,17 +633,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # 计算质心均值偏移方向（复用 llama_utils）
-    B_th, L_th, HD_th = tuning_headwise.shape
-    if args.num_heads is None:
-        if HD_th % args.head_dim != 0:
-            raise ValueError('无法从特征维推断 num_heads，请显式传入 --num_heads')
-        num_heads_calc = HD_th // args.head_dim
-    else:
-        num_heads_calc = args.num_heads
-    tuning_sep = rearrange(tuning_headwise, 'b l (h d) -> b l h d', h=num_heads_calc, d=args.head_dim)
-    num_questions = B_th // 2
-    separated_head, separated_labels, _ = get_separated_activations_nq(tuning_labels, tuning_sep, num_questions)
-    train_set_idxs = np.arange(num_questions)
-    val_set_idxs = np.array([], dtype=int)
-    com_directions = get_com_directions(L_th, num_heads_calc, train_set_idxs, val_set_idxs, separated_head, separated_labels)

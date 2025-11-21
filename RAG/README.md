@@ -38,7 +38,7 @@
 ## 训练探针
 
 - 基本命令：
-  - `python RAG/train_save_probes.py --model_name llama2_chat_7B --num_heads 32 --head_dim 128 --top_k 48`
+  - `python RAG/train_save_probes.py --model_name llama2_chat_7B --num_heads 32 --head_dim 128 --top_k 1024`
 - 输出目录：`RAG/results_dump/probes/`
   - `*_probes.pkl`：所有头的探针（长度 = L×H）。
   - `*_val_accs.npy`：验证准确率矩阵，形状 `(L, H)`。
@@ -56,7 +56,7 @@
      --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
      --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
      --select_top_k 1024 \
-     --alpha 5 --pf_gamma 1.0`
+     --alpha 5 --pf_gamma 1.0 --max_samples 100`
 
 - 输出：
   - `results_dump/main/.../answer_dump/*.jsonl`
@@ -75,6 +75,17 @@
      --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
      --scores_csv RAG/results_dump/probes/accs_csv.csv \
      --alphas range:1:19:2 --probe_factor_modes true --max_new_tokens 256`
+
+  - `python RAG/nq_hparam_search.py \
+  --model_name llama2_chat_7B \
+  --dataset_path RAG/data/test.jsonl \
+  --use_chat_template \
+  --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
+  --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
+  --scores_csv RAG/results_dump/probes/accs_csv.csv \
+  --alphas 0.3,0.5,0.7,1,2,3,4,5,6,7 --probe_factor_modes true --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results_dump/llama-2-7b-instruct-layers_0_10`
 
 - 产物：`results_dump/llama-2-7b-instruct-unified/` 下的逐次 summary 与最终汇总 CSV。
 
