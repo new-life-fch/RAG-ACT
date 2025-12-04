@@ -47,8 +47,8 @@ def extract_random_jsonl_lines(input_file, output_file, num_lines, random_seed=N
 # --- 主程序 ---
 if __name__ == "__main__":
     # 定义输入和输出文件名
-    input_filename = 'RAG/data/nq-dev_deduplicated.jsonl'  # 原始文件名
-    output_filename = 'RAG/data/train.jsonl' # 文件的名称   
+    input_filename = 'RAG/data/TriviaQA/trivia-dev.jsonl'  # 原始文件名
+    output_filename = 'RAG/data/TriviaQA/data.jsonl' # 文件的名称   
     lines_to_extract = 4000          # 要提取的行数
     random_seed = 2025               # 随机种子
 

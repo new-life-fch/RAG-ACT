@@ -137,6 +137,13 @@ def make_selection_strategies(
     strategies['layers_20_31'] = [(l, h) for (l, h, s) in scores if 20 <= l < clamp_end(32)]
     strategies['layers_10_31'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(32)]
     strategies['layers_0_31'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(32)]
+    strategies['layers_0_5'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(5)]
+    strategies['layers_5_10'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(10)]
+    strategies['layers_5_15'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(15)]
+    strategies['layers_10_15'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(15)]
+    strategies['layers_15_20'] = [(l, h) for (l, h, s) in scores if 15 <= l < clamp_end(20)]
+
+
 
     # 全部头
     strategies['all_heads'] = [(l, h) for (l, h, s) in scores]

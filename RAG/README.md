@@ -22,6 +22,7 @@
 - `RAG/nq_generate_with_interventions.py`：主实验脚本。读取“所有头”的探针与准确率，可按需选择 Top-k；默认使用 CoM 方向并引入 `(1-动态分数)`。
 - `RAG/nq_hparam_search.py`：超参数搜索。支持多种头选择策略、强度网格与分层强度映射；默认使用 CoM 方向与 `(1-动态分数)`。
 - `RAG/nq_generate_random_and_fixed.py`：消融实验。包含随机方向与固定强度两路；已加入 `(1-动态分数)` 并支持 CoM 方向的固定强度设置。
+- `RAG/causal_trace_experiment.py`: 因果追踪实验。分别干预LLM每层的所有头，观察结果指标，并根据EM和F1分数相对于标准RAG的增长进行综合排序，输出到一个csv文件。
 
 ## 数据与准备
 
@@ -56,7 +57,7 @@
      --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
      --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
      --select_top_k 1024 \
-     --alpha 5 --pf_gamma 1.0 --max_samples 100`
+     --alpha 5 --pf_gamma 1.0`
 
 - 输出：
   - `results_dump/main/.../answer_dump/*.jsonl`
@@ -76,6 +77,7 @@
      --scores_csv RAG/results_dump/probes/accs_csv.csv \
      --alphas range:1:19:2 --probe_factor_modes true --max_new_tokens 256`
 
+  NQ:
   - `python RAG/nq_hparam_search.py \
   --model_name llama2_chat_7B \
   --dataset_path RAG/data/test.jsonl \
@@ -85,9 +87,50 @@
   --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
   --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
   --scores_csv RAG/results_dump/probes/accs_csv.csv \
-  --alphas 0.3,0.5,0.7,1,2,3,4,5,6,7 --probe_factor_modes true --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results_dump/llama-2-7b-instruct-layers_0_10`
+  --alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results_dump/llama-2-7b-instruct-layers_0_10_alphas_5`
+
+  Trivia QA:
+  python RAG/nq_hparam_search.py \
+  --model_name llama2_chat_7B \
+  --dataset_path RAG/data/TriviaQA/test.jsonl \
+  --use_chat_template \
+  --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
+  --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
+  --scores_csv RAG/results_dump/probes/accs_csv.csv \
+  --alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results_dump/llama-2-7b-instruct-layers_0_10_trivia_qa
+
 
 - 产物：`results_dump/llama-2-7b-instruct-unified/` 下的逐次 summary 与最终汇总 CSV。
+
+## 因果追踪实验
+
+- 示例命令：
+  ```bash
+  python RAG/causal_trace_experiment.py \
+    --model_name llama2_chat_7B \
+    --dataset_path /root/shared-nvme/RAG-llm/RAG/data/test.jsonl \
+    --probes_path ./RAG/features/llama2_chat_7B_nq_probes.pkl \
+    --val_accs_path ./RAG/features/llama2_chat_7B_nq_val_accs.npy \
+    --tuning_headwise_path ./RAG/features/llama2_chat_7B_nq_head_wise.npy \
+    --tuning_labels_path ./RAG/features/llama2_chat_7B_nq_labels.npy \
+    --sample_size 50 \
+    --output_csv causal_layer_trace.csv \
+    --alpha 15.0 \
+    --max_new_tokens 64
+  ```
+  ```
+  python RAG/causal_trace_experiment.py \
+  --model_name llama2_chat_7B \
+  --dataset_path RAG/data/test.jsonl \
+  --use_chat_template \
+  --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
+  --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
+  --alpha 5.0 --max_new_tokens 256 --output_csv RAG/causal_layer_trace.csv
+  ```
 
 ## 消融实验（随机/固定）
 

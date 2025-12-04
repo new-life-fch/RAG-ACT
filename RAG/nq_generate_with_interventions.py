@@ -120,7 +120,7 @@ def main():
     parser.add_argument('--use_chat_template', action='store_true')
     parser.add_argument('--max_samples', type=int, default=None)
     parser.add_argument('--max_docs', type=int, default=None)
-    parser.add_argument('--sample_size', type=int, default=300, help='随机抽取的样本数')
+    parser.add_argument('--sample_size', type=int, default=100, help='随机抽取的样本数')
     parser.add_argument('--sample_seed', type=int, default=2025, help='随机抽样种子')
     parser.add_argument('--alpha', type=float, default=15.0, help='干预强度系数')
     parser.add_argument('--head_dim', type=int, default=128)
