@@ -9,63 +9,58 @@ import torch
 from zai import ZhipuAiClient
 from dotenv import load_dotenv
 import textwrap
+from prompts_templates import prompt_dict
 
 # 加载环境变量
 load_dotenv()
 
 def select_random_passages(positive_passages, negative_passages, random_seed=2025):
     """
-    从positive_passages的第二个片段和negative_passages的前两个片段中随机选择2个，
-    加上positive_passages的第一个片段，总共3个片段。
+    从positive_passages和negative_passages中选择5个片段。
+    其中必须包含positive_passages的第一个片段。
+    剩余4个片段从剩余的positive_passages和所有negative_passages中随机选择，
+    使得每个片段（无论来自positive还是negative）被选中的概率相同。
     
     :param positive_passages: 正向片段列表
     :param negative_passages: 负向片段列表
     :param random_seed: 随机种子
-    :return: 选择的3个片段列表
+    :return: 选择的5个片段列表
     """
     random.seed(random_seed)
     
     # 获取positive_passages的第一个片段（必选）
     first_positive = positive_passages[0]
     
-    # 候选片段：positive_passages的第二个 + negative_passages的前两个
-    candidates = []
+    # 构建候选池：positive_passages的剩余部分 + 全部negative_passages
+    # 注意：这里需要排除已经选中的first_positive
+    pool = []
     if len(positive_passages) > 1:
-        candidates.append(positive_passages[1])
-    if len(negative_passages) >= 2:
-        candidates.extend(negative_passages[:2])
+        pool.extend(positive_passages[1:])
+    pool.extend(negative_passages)
     
-    # 从候选片段中随机选择2个
-    selected_candidates = random.sample(candidates, min(2, len(candidates)))
+    # 从候选池中随机选择4个片段（如果不足4个则全选）
+    # 使用random.sample确保无放回抽样，且每个元素被选概率相等
+    num_to_select = min(4, len(pool))
+    selected_from_pool = random.sample(pool, num_to_select)
     
-    # 组合结果：第一个positive + 随机选择的2个
-    result = [first_positive] + selected_candidates
+    # 组合结果：第一个positive + 随机选择的片段
+    result = [first_positive] + selected_from_pool
     
     return result
 
-def generate_llama_answer(query, passages, pipe):
+def generate_llama_answer(question, docs_texts, pipe):
     """
     使用Llama模型生成回答
     
-    :param query: 问题
-    :param passages: 检索到的片段列表
+    :param question: 问题
+    :param docs_texts: 检索到的片段列表
     :param pipe: transformers pipeline对象
     :return: 生成的回答
     """
-    # 构建参考文档
-    reference_text = "\n\n".join([f"Document {i+1}: {passage['text']}" for i, passage in enumerate(passages)])
-    
     # 构建提示词
-    system_prompt = textwrap.dedent(f'''
-Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
-
-The following are given document fragments.
-        
-{reference_text}
-
-''').strip()
-
-    user_prompt = f"Question: {query}\nAnswer:"
+    docs_block = "\n\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+    system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
+    user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
     
     # 构建 Llama 3.1 的消息列表
     messages = [
@@ -132,7 +127,7 @@ Only return the JSON object, no additional text.
         
         # 调用GLM API
         response = client.chat.completions.create(
-            model="glm-4.5-flash",
+            model="GLM-4.5-X",
             messages=[
                 {"role": "user", "content": prompt}
             ],
@@ -287,8 +282,8 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
 # --- 主程序 ---
 if __name__ == "__main__":
     # 新功能：生成新数据集
-    input_file = '/root/shared-nvme/RAG-llm/RAG/data/nq-dev-train.jsonl'
-    output_file = '/root/shared-nvme/RAG-llm/RAG/data/llama_2_chat_7b.jsonl'
+    input_file = 'RAG/data/TriviaQA/trivia-dev-train.jsonl'
+    output_file = 'RAG/data/TriviaQA/llama_2_chat_7b_train.jsonl'
     
     # 先用10条数据进行测试
-    generate_new_dataset(input_file, output_file, num_samples=3000, random_seed=2025)
+    generate_new_dataset(input_file, output_file, num_samples=1500, random_seed=2025)

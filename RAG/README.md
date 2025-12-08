@@ -13,142 +13,125 @@
 - 激活采集：在真实的 NQ（Natural Questions）检索输入下，记录每层每个注意力头的输出激活。
 - 探针训练：为每个 `(layer, head)` 训练二分类逻辑回归探针，衡量该头对区分正/负样本的能力（验证准确率）。
 - 干预方向：默认采用“质心均值偏移”（Center-of-Mass, CoM），即正样本均值减负样本均值的方向；也支持随机方向或探针系数方向。
-- 动态强度：在生成时根据当前激活的探针“动态分数”进行抑制，使用 `1 - sigmoid(w·x + b)` 作为强度因子；并乘以 `alpha × proj_val_std × (reliability^γ)`，其中 `reliability` 来自该头的验证准确率。
 
 ## 代码结构与主脚本
 
 - `RAG/llama_get_activations.py`：采集激活，保存至 `RAG/features/`。
 - `RAG/train_save_probes.py`：训练所有头的探针，保存探针、准确率矩阵，以及可选的 Top-k 头列表至 `RAG/results_dump/probes/`。
-- `RAG/nq_generate_with_interventions.py`：主实验脚本。读取“所有头”的探针与准确率，可按需选择 Top-k；默认使用 CoM 方向并引入 `(1-动态分数)`。
 - `RAG/nq_hparam_search.py`：超参数搜索。支持多种头选择策略、强度网格与分层强度映射；默认使用 CoM 方向与 `(1-动态分数)`。
-- `RAG/nq_generate_random_and_fixed.py`：消融实验。包含随机方向与固定强度两路；已加入 `(1-动态分数)` 并支持 CoM 方向的固定强度设置。
 - `RAG/causal_trace_experiment.py`: 因果追踪实验。分别干预LLM每层的所有头，观察结果指标，并根据EM和F1分数相对于标准RAG的增长进行综合排序，输出到一个csv文件。
+- `RAG/nq_layer_hparam_search.py`: 基于因果追踪结果的前 k 层超参数搜索实验。根据 `causal_layer_trace.csv` 的结果，对前 k 层（k=1...L）的所有头进行干预，并汇总 Baseline 与 Delta EM/F1 到 CSV 文件。
+- `RAG/nq_fine_grained_hparam_search.py`: 基于因果追踪结果的细粒度超参数搜索实验。根据 `causal_layer_trace.csv` 的结果，对前k层的分数阈值前m个头（m=1...M）进行干预，并汇总 Baseline 与 Delta EM/F1 到 CSV 文件。
 
 ## 数据与准备
 
 1. 准备模型权重（示例路径）：
    - Llama-2-7b-chat: `/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf`
-   - Llama-3.1-8B-Instruct: `/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct`
+   - Llama-3-8B-Instruct: `/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct`
 
 2. 采集 NQ 激活与标签：
-   - 将 `RAG/data/llama_2_chat_7b_train.jsonl` 或自定义 NQ 格式数据放置到合适位置。
+   - 将 `RAG/data/NQ/llama_2_chat_7b_train.jsonl` 或自定义 NQ 格式数据放置到合适位置。
    - 运行示例（使用 chat 模板）：
-     - `python RAG/llama_get_activations.py --model_name llama2_chat_7B --dataset_name nq --use_chat_template`
+     - `python RAG/llama_get_activations.py --model_name llama2_chat_7B --dataset_name nq --use_chat_template --nq_jsonl RAG/data/NQ/llama_2_chat_7b_train.jsonl`
    - 产物：`RAG/features/{model}_nq_head_wise.npy`、`RAG/features/{model}_nq_labels.npy`、可选 `tokens.pkl`。
 
 ## 训练探针
 
 - 基本命令：
-  - `python RAG/train_save_probes.py --model_name llama2_chat_7B --num_heads 32 --head_dim 128 --top_k 1024`
+  - `python RAG/train_save_probes.py --model_name llama2_chat_7B --num_heads 32 --head_dim 128 --top_k 1024 --num_fold 3`
 - 输出目录：`RAG/results_dump/probes/`
   - `*_probes.pkl`：所有头的探针（长度 = L×H）。
   - `*_val_accs.npy`：验证准确率矩阵，形状 `(L, H)`。
   - `*_top_heads.pkl`：Top-k 头列表（可选）。
 
-## 主实验（干预生成）
+## 获取探针的验证集分数
+- 基本命令：
+  - `python RAG/utils/inspect_probes.py RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_val_accs.npy --out-csv RAG/results_dump/probes/accs_csv.csv`
 
-- 读取“所有头”探针与准确率，按需选择 Top-k（或全部）：
-  - `python RAG/nq_generate_with_interventions.py \
-     --model_name llama2_chat_7B \
-     --dataset_path RAG/data/test.jsonl \
-     --use_chat_template \
-     --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
-     --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
-     --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
-     --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
-     --select_top_k 1024 \
-     --alpha 5 --pf_gamma 1.0`
-
-- 输出：
-  - `results_dump/main/.../answer_dump/*.jsonl`
-  - `results_dump/main/.../summary_dump/*.json`
-
-## 超参数搜索
+## 实验
 
 - 示例命令：
-  - `python RAG/nq_hparam_search.py \
-     --model_name llama2_chat_7B \
-     --dataset_path RAG/data/test.jsonl \
-     --use_chat_template \
-     --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
-     --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
-     --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
-     --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
-     --scores_csv RAG/results_dump/probes/accs_csv.csv \
-     --alphas range:1:19:2 --probe_factor_modes true --max_new_tokens 256`
 
   NQ:
-  - `python RAG/nq_hparam_search.py \
-  --model_name llama2_chat_7B \
-  --dataset_path RAG/data/test.jsonl \
-  --use_chat_template \
-  --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
-  --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
-  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
-  --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
-  --scores_csv RAG/results_dump/probes/accs_csv.csv \
-  --alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results_dump/llama-2-7b-instruct-layers_0_10_alphas_5`
+```bash
+python RAG/nq_hparam_search.py \
+--model_name llama2_chat_7B \
+--dataset_path RAG/data/NQ/test.jsonl \
+--use_chat_template \
+--probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
+--tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
+--scores_csv RAG/results_dump/probes/accs_csv.csv \
+--alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies top_10_layers --results_root RAG/results_dump/llama-2-chat-7b-top_10_layers_alphas_5
+```
 
   Trivia QA:
-  python RAG/nq_hparam_search.py \
-  --model_name llama2_chat_7B \
-  --dataset_path RAG/data/TriviaQA/test.jsonl \
-  --use_chat_template \
-  --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
-  --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
-  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
-  --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
-  --scores_csv RAG/results_dump/probes/accs_csv.csv \
-  --alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results_dump/llama-2-7b-instruct-layers_0_10_trivia_qa
-
+```bash
+python RAG/nq_hparam_search.py \
+--model_name llama2_chat_7B \
+--dataset_path RAG/data/TriviaQA/test.jsonl \
+--use_chat_template \
+--probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
+--val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
+--tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
+--tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
+--scores_csv RAG/results_dump/probes/accs_csv.csv \
+--alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results_dump/llama-2-7b-instruct-layers_0_10_trivia_qa
+```
 
 - 产物：`results_dump/llama-2-7b-instruct-unified/` 下的逐次 summary 与最终汇总 CSV。
 
 ## 因果追踪实验
 
-- 示例命令：
-  ```bash
-  python RAG/causal_trace_experiment.py \
-    --model_name llama2_chat_7B \
-    --dataset_path /root/shared-nvme/RAG-llm/RAG/data/test.jsonl \
-    --probes_path ./RAG/features/llama2_chat_7B_nq_probes.pkl \
-    --val_accs_path ./RAG/features/llama2_chat_7B_nq_val_accs.npy \
-    --tuning_headwise_path ./RAG/features/llama2_chat_7B_nq_head_wise.npy \
-    --tuning_labels_path ./RAG/features/llama2_chat_7B_nq_labels.npy \
-    --sample_size 50 \
-    --output_csv causal_layer_trace.csv \
-    --alpha 15.0 \
-    --max_new_tokens 64
-  ```
-  ```
-  python RAG/causal_trace_experiment.py \
+```bash
+python RAG/causal_trace_experiment.py \
   --model_name llama2_chat_7B \
-  --dataset_path RAG/data/test.jsonl \
+  --dataset_path RAG/data/NQ/test.jsonl \
   --use_chat_template \
+  --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_probes.pkl \
+  --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
+  --alpha 5.0 --max_new_tokens 256 --output_csv RAG/causal_layer_trace_pf0.csv
+```
+
+## 前 k 层干预超参数搜索实验 (Based on Causal Trace)
+
+- 示例命令：
+```bash
+python RAG/nq_layer_hparam_search.py \
+  --model_name llama2_chat_7B \
+  --dataset_path /root/shared-nvme/RAG-llm/RAG/data/test.jsonl \
   --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
   --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
   --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
   --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
-  --alpha 5.0 --max_new_tokens 256 --output_csv RAG/causal_layer_trace.csv
-  ```
+  --sample_size 100 \
+  --summary_csv RAG/top_layer_intervention_results.csv \
+  --alphas 5 \
+  --max_new_tokens 256
+```
 
-## 消融实验（随机/固定）
-
+## 细粒度超参数搜索实验
 - 示例命令：
-  - `python RAG/nq_generate_random_and_fixed.py \
-     --model_name llama2_chat_7B \
-     --dataset_path RAG/data/test.jsonl \
-     --use_chat_template \
-     --top_heads_path RAG/results_dump/probes/<your>_top_heads.pkl \
-     --probes_path RAG/results_dump/probes/<your>_probes.pkl \
-     --val_accs_path RAG/results_dump/probes/<your>_val_accs.npy \
-     --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
-     --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
-     --alpha 15 --pf_gamma 1.0`
-
-- 两路设置：
-  - 随机方向：`use_random_dir=True`，仍使用 `(1-动态分数)` 抑制与 `reliability^γ`。
-  - 固定强度：改为 CoM 方向；使用 `(1-动态分数)` 与 `reliability^γ`。
+```bash
+python RAG/nq_fine_grained_hparam_search.py \
+  --model_name llama2_chat_7B \
+  --dataset_path RAG/data/NQ/test.jsonl \
+  --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_probes.pkl \
+  --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
+  --causal_trace_path RAG/causal_layer_trace_5_snippets_pf0.csv \
+  --head_scores_path /root/shared-nvme/RAG-llm/RAG/results_dump/probes/accs_csv.csv \
+  --sample_size 100 \
+  --top_k_layers 7 \
+  --thresholds 0.7 \
+  --summary_csv RAG/fine_grained_intervention_results_5.csv \
+  --alphas 5 \
+  --max_new_tokens 256
+```
 
 ## 评估指标
 
@@ -164,5 +147,14 @@
 
 - 路径命名中 `{model}` 必须与实际采集/训练时一致，确保 `head_wise.npy` 与 `labels.npy` 对应同一模型与数据集。
 - `--num_heads` 与 `--head_dim` 必须与模型配置一致（如 Llama2-7B chat 为 32×128）。
-- 干预强度的三个乘子：`alpha`、`proj_val_std`、`reliability^γ`；以及抑制因子 `(1-动态分数)`。
+- 干预强度的三个乘子：`alpha`、`proj_val_std`、`reliability^γ`；
 - 若出现空类样本导致 CoM 方向为零向量，代码会回退为零向量，不影响运行但建议检查数据覆盖。
+
+临时命令：
+
+python RAG/nq_hparam_search.py --model_name llama2_chat_7B --dataset_path RAG/data/NQ/test.jsonl --use_chat_template --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_probes.pkl --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_val_accs.npy --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy --scores_csv RAG/results_dump/probes/accs_csv.csv --alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies layers_0_10,layers_0_5,layers_5_10,score_ge_0.7,score_ge_0.9,topk_48_by_score,topk_64_by_score --results_root RAG/results_dump/llama-2-chat-7b-result_alphas_5
+
+python RAG/nq_hparam_search.py --model_name llama2_chat_7B --dataset_path RAG/data/NQ/test_noise_test_noise5.jsonl --use_chat_template --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_probes.pkl --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_val_accs.npy --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy --scores_csv RAG/results_dump/probes/accs_csv.csv --alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies top_5_layers --results_root RAG/results_dump/llama-2-chat-7b-top_5_layers-nosie5
+
+数据构建：
+python RAG/utils/3_extract_remaining_testset.py --input RAG/data/NQ/nq-dev-train.jsonl --val-output RAG/data/NQ/val_noise_test.jsonl --test-output RAG/data/NQ/test_noise_test.jsonl --train-num 1500 --val-num 1000 --test-num 2000 --method random --seed 2025 --noise-levels 0,1,2,3,4,5

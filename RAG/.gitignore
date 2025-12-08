@@ -4,3 +4,7 @@ __pycache__/
 .ipynb_checkpoints/
 results_dump_dynamic
 features_dynamic
+features_3_snippets
+results_dump_dynamic_3
+features_dynamic_3
+results_dump_3_snippets

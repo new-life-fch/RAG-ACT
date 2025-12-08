@@ -24,6 +24,7 @@ from functools import partial
 import json
 from typing import List, Tuple, Any
 import textwrap
+from utils.prompts_templates import prompt_dict
 
 
 
@@ -285,17 +286,9 @@ def tokenized_nq_with_docs_dual(
                 docs_texts.append(text.strip())
 
         # 构造系统/用户提示词（强调“基于给定文档作答，仅输出直接答案”）
-        docs_block = "\n\n".join([f"Document {k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = textwrap.dedent(f'''
-Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
-
-The following are given document fragments.
-        
-{docs_block}
-
-''').strip()
-
-        user_prompt = f"Question: {question}\nAnswer:"
+        docs_block = "\n\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+        system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
+        user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
 
         # 正确答案（label=1），将答案作为助手消息以实现 teacher forcing
         correct_answer = answers[0]

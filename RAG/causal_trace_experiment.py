@@ -22,6 +22,7 @@ from llama_utils import (
     get_separated_activations_nq,
     get_com_directions,
 )
+from utils.prompts_templates import prompt_dict
 
 
 # 模型路径映射
@@ -65,17 +66,10 @@ def build_nq_generation_inputs(
             if isinstance(text, str) and len(text.strip()):
                 docs_texts.append(text.strip())
 
-        docs_block = "\n\n".join([f"Document {k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = textwrap.dedent(f'''
-Answer the question based strictly on the provided document fragments. Provide only the most direct and concise answer. Do not include explanations, full sentences, or additional context.
+        docs_block = "\n\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+        system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
+        user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
 
-The following are given document fragments.
-        
-{docs_block}
-
-''').strip()
-
-        user_prompt = f"Question: {question}\nAnswer:"
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
         inputs.append(input_ids)
