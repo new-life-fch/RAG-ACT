@@ -74,7 +74,7 @@ def build_nq_generation_inputs(
             if isinstance(text, str) and len(text.strip()):
                 docs_texts.append(text.strip())
 
-        docs_block = "\n\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+        docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
         system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
         user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
 

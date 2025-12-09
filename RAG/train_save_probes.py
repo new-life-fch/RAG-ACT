@@ -19,17 +19,17 @@ def main():
     """
     训练并筛选前 top-k 个探针，并保存到磁盘，便于后续实验复用。
 
-    使用从 NQ 数据集生成的特征：
-    - `../RAG-llm/RAG/features/{model_name}_nq_labels.npy`
-    - `../RAG-llm/RAG/features/{model_name}_nq_head_wise.npy`
-    - `../RAG-llm/RAG/features/{model_name}_nq_tokens.pkl`（可选，分析定位用）
+    使用从 NQ 数据集生成的特征（路径可通过 --feat_dir 指定）：
+    - `{feat_dir}/{model_name}_nq_labels.npy`
+    - `{feat_dir}/{model_name}_nq_head_wise.npy`
+    - `{feat_dir}/{model_name}_nq_tokens.pkl`（可选，分析定位用）
 
     处理流程：
     1. 加载 head-wise 激活并 reshape 为 `(B, L, H, D)`；
     2. 基于样本数推断问题数（每题 2 个样本：正确+错误），拆分为每题一组；
     3. 随机划分训练/验证集合索引；
     4. 调用 `train_probes` 训练 LR 探针，按验证集准确率排序选出 top-k；
-    5. 保存：探针列表、top-k 头列表、准确率数组，便于后续复现实验与干预。
+    5. 保存：探针列表、top-k 头列表、准确率数组（路径可通过 --save_dir 指定）。
 
     初学者注释：探针是一个简单的线性分类器（逻辑回归），输入是注意力头的激活向量，输出是该向量是否更“像”正确答案的二分类结果。
     """
@@ -38,10 +38,10 @@ def main():
     parser.add_argument('--model_name', type=str, default='llama_7B')
     parser.add_argument('--num_heads', type=int, default=None, help='模型的注意力头数（用于 reshape），默认从特征维度推断')
     parser.add_argument('--head_dim', type=int, default=128, help='每个注意力头的维度（默认 128，与 LLAMA 一致）')
-    parser.add_argument('--top_k', type=int, default=48, help='选择并保存的前 k 个探针')
-    parser.add_argument('--seed', type=int, default=42, help='随机种子')
+    parser.add_argument('--top_k', type=int, default=1024, help='选择并保存的前 k 个探针')
+    parser.add_argument('--seed', type=int, default=2025, help='随机种子')
     parser.add_argument('--val_ratio', type=float, default=0.2, help='验证集比例')
-    parser.add_argument('--num_fold', type=int, default=2, help='可选：K折交叉验证的折数，>1时启用；=1时仅随机划分')
+    parser.add_argument('--num_fold', type=int, default=3, help='可选：K折交叉验证的折数，>1时启用；=1时仅随机划分')
     parser.add_argument(
         '--cv_final_train',
         type=str,
@@ -49,17 +49,22 @@ def main():
         choices=['none', 'full'],
         help='当 --num_fold>1 时，是否在折均值后用全数据重训探针并保存：full=用全数据重训（推荐），none=保存第一折的探针（原行为）'
     )
+    # 新增：输入特征文件夹参数
+    parser.add_argument('--feat_dir', type=str, default='../RAG-llm/RAG/features', 
+                        help='特征文件所在的输入文件夹路径（默认：../RAG-llm/RAG/features）')
+    # 新增：输出结果文件夹参数
+    parser.add_argument('--save_dir', type=str, default='../RAG-llm/RAG/results_dump/probes',
+                        help='探针及结果保存的输出文件夹路径（默认：../RAG-llm/RAG/results_dump/probes）')
     args = parser.parse_args()
 
     np.random.seed(args.seed)
 
-    # 路径准备
-    feat_dir = '../RAG-llm/RAG/features'
-    labels_path = os.path.join(feat_dir, f'{args.model_name}_nq_labels.npy')
-    head_path = os.path.join(feat_dir, f'{args.model_name}_nq_head_wise.npy')
+    # 路径准备（使用参数指定的文件夹）
+    labels_path = os.path.join(args.feat_dir, f'{args.model_name}_nq_labels.npy')
+    head_path = os.path.join(args.feat_dir, f'{args.model_name}_nq_head_wise.npy')
 
     if not (os.path.exists(labels_path) and os.path.exists(head_path)):
-        raise FileNotFoundError('未找到 NQ 特征文件，请先运行 RAG/llama_get_activations.py --dataset_name nq 收集特征')
+        raise FileNotFoundError(f'未找到 NQ 特征文件，请先运行 RAG/llama_get_activations.py --dataset_name nq 收集特征，或检查 --feat_dir 参数是否正确。缺失文件：\n- {labels_path}\n- {head_path}')
 
     labels = np.load(labels_path)
     head_wise = np.load(head_path)
@@ -138,15 +143,14 @@ def main():
         probes_to_save = probes
         accs_to_save = accs_np.reshape(L, num_heads)
 
-    # 保存探针与 top-k 结果
-    save_dir = '../RAG-llm/RAG/results_dump/probes'
-    os.makedirs(save_dir, exist_ok=True)
+    # 保存探针与 top-k 结果（使用参数指定的输出文件夹）
+    os.makedirs(args.save_dir, exist_ok=True)
     base = f'{args.model_name}_nq_seed_{args.seed}_top_{args.top_k}'
     if args.num_fold and args.num_fold > 1:
         base += f'_folds_{args.num_fold}'
-    probes_path = os.path.join(save_dir, base + '_probes.pkl')
-    top_heads_path = os.path.join(save_dir, base + '_top_heads.pkl')
-    accs_path = os.path.join(save_dir, base + '_val_accs.npy')
+    probes_path = os.path.join(args.save_dir, base + '_probes.pkl')
+    top_heads_path = os.path.join(args.save_dir, base + '_top_heads.pkl')
+    accs_path = os.path.join(args.save_dir, base + '_val_accs.npy')
 
     save_probes(probes_to_save, probes_path)
     with open(top_heads_path, 'wb') as f:

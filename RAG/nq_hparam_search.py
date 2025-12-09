@@ -28,7 +28,7 @@ from utils.prompts_templates import prompt_dict
 # 模型路径映射（与现有脚本保持一致）
 HF_NAMES = {
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
-    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct',
+    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
 }
 
 
@@ -67,7 +67,7 @@ def build_nq_generation_inputs(
             if isinstance(text, str) and len(text.strip()):
                 docs_texts.append(text.strip())
 
-        docs_block = "\n\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+        docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
         system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
         user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
 
@@ -126,6 +126,7 @@ def make_selection_strategies(
     strategies['layers_5_15'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(15)]
     strategies['layers_10_15'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(15)]
     strategies['layers_15_20'] = [(l, h) for (l, h, s) in scores if 15 <= l < clamp_end(20)]
+    strategies['layers_7_16'] = [(l, h) for (l, h, s) in scores if 7 <= l < clamp_end(16)]
 
     # Top Layers from Causal Trace Experiment
     strategies['top_3_layers'] = [(l, h) for (l, h, s) in scores if l in [8, 10, 7]]

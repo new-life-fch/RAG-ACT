@@ -3,9 +3,9 @@ prompt_dict = {
         'naive_LLM':
         'Answer the following question based on your internal knowledge with one or few words.\n\nQuestion: {question}\nAnswer: ',
         'naive_RAG':
-        'Answer the question based on the given document.\nOnly give me the answer and do not output any other words."\n\nThe following are given documents. \n{paras}.\n\nQuestion: {question}\nAnswer: {answer}',
+        'Answer the question based on the given document.\nOnly give me the answer and do not output any other words.\n\nThe following are given documents. \n{paras}.\n\nQuestion: {question}\nAnswer: {answer}',
         'naive_RAG_system':
-        'Answer the question based on the given document.\nOnly give me the answer and do not output any other words."\n\nThe following are given documents. \n{paras}',
+        'Answer the question based on the given document.\nOnly give me the answer and do not output any other words.\n\nThe following are given documents. \n{paras}',
         'naive_RAG_user':
         'Question: {question}\nAnswer: {answer}',
         'CoN_system':

@@ -286,7 +286,7 @@ def tokenized_nq_with_docs_dual(
                 docs_texts.append(text.strip())
 
         # 构造系统/用户提示词（强调“基于给定文档作答，仅输出直接答案”）
-        docs_block = "\n\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+        docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
         system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
         user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
 

@@ -58,7 +58,7 @@ def generate_llama_answer(question, docs_texts, pipe):
     :return: 生成的回答
     """
     # 构建提示词
-    docs_block = "\n\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+    docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
     system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
     user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
     
@@ -99,7 +99,7 @@ def check_answer_correctness_with_glm(llama_answer, correct_answers, api_key=Non
     try:
         # 从环境变量获取API密钥
         if api_key is None:
-            api_key = os.getenv('GLM_API_KEY')
+            api_key = os.getenv('GLM_API_KEY_2')
             if api_key is None:
                 raise ValueError("GLM API密钥未设置，请在.env文件中设置GLM_API_KEY或传入api_key参数")
         
