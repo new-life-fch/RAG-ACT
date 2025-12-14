@@ -9,8 +9,12 @@ prompt_dict = {
         'naive_RAG_user':
         'Question: {question}\nAnswer: {answer}',
         'CoN_system':
-        'Task Description: \n 1. Read the given question and five Wikipedia passages to gather relevant information.\n2. Write reading notes summarizing the key points from these passages.\n3. Discuss the relevance of the given question and Wikipedia passages.\n4. If some passages are relevant to the given question, provide a brief answer based on the passages. \n5. If no passage is relevant, direcly provide answer without considering the passages.\n\nPassages:\n{passages}',
+        'You are a helpful assistant!',
         'CoN_user':
-        '{question}',
+        'Task Description: \n 1. Read the given question and five Wikipedia passages to gather relevant information.\n2. Write reading notes summarizing the key points from these passages.\n3. Discuss the relevance of the given question and Wikipedia passages.\n4. If some passages are relevant to the given question, provide a brief answer based on the passages. \n5. If no passage is relevant, direcly provide answer without considering the passages.\n6. Only give me the answer and do not output any other words.\n\nPassages:\n{passages}\n\nQuestion: {question}',
+        'RAG_system':
+        'You are a helpful assistant!',
+        'RAG_user': 
+        'Given the following information: \n{paras}\n\nAnswer the following question based on the given information or your internal knowledge with one or few words without the source.\nQuestion: {question}\nAnswer: {answer}',
     },
 }

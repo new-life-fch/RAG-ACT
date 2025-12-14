@@ -35,13 +35,13 @@
 3. 采集 NQ 激活与标签：
    - 将 `RAG/data/NQ/llama_2_chat_7b_train.jsonl` 或自定义 NQ 格式数据放置到合适位置。
    - 运行示例（使用 chat 模板）：
-     - `python RAG/llama_get_activations.py --model_name llama2_chat_7B --dataset_name nq --use_chat_template --nq_jsonl RAG/data/NQ/llama_2_chat_7b_train.jsonl`
+     - `python RAG/llama_get_activations.py --model_name llama2_chat_7B --dataset_name nq --use_chat_template --nq_jsonl RAG/data/NQ/llama_2_chat_7b_train_user.jsonl --output_dir RAG/features/llama2_chat_7B_nq_uesr`
    - 产物：`RAG/features/{model}_nq_head_wise.npy`、`RAG/features/{model}_nq_labels.npy`、可选 `tokens.pkl`。
 
 ## 训练探针
 
 - 基本命令：
-  - `python RAG/train_save_probes.py --model_name llama2_chat_7B --num_heads 32 --head_dim 128 --feat_dir RAG/features/llama2_chat_7B_nq --save_dir RAG/probes/llama2_chat_7B_nq --cv_final_train full`
+  - `python RAG/train_save_probes.py --model_name llama2_chat_7B --num_heads 32 --head_dim 128 --feat_dir RAG/features/llama2_chat_7B_nq_user --save_dir RAG/probes/llama2_chat_7B_nq_user --cv_final_train full`
 - 输出目录：`RAG/results_dump/probes/`
   - `*_probes.pkl`：所有头的探针（长度 = L×H）。
   - `*_val_accs.npy`：验证准确率矩阵，形状 `(L, H)`。
@@ -49,11 +49,11 @@
 
 ## 获取探针的验证集分数
 - 基本命令：
-  - `python RAG/utils/inspect_probes.py RAG/probes/llama2_chat_7B_nq/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_val_accs.npy --out-csv RAG/probes/llama2_chat_7B_nq/accs_csv.csv`
+  - `python RAG/utils/inspect_probes.py RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_val_accs.npy --out-csv RAG/probes/llama2_chat_7B_nq_user/accs_csv.csv`
 
 ## 热力图工具
 - 基本命令
-  - `python RAG/utils/plot_probe_heatmap.py /root/shared-nvme/RAG-llm/RAG/probes/llama2_chat_7B_nq/accs_csv.csv --output /root/shared-nvme/RAG-llm/RAG/probes/llama2_chat_7B_nq/accs_heatmap.png --cmap turbo --bins 12 --discrete`
+  - `python RAG/utils/plot_probe_heatmap.py /root/shared-nvme/RAG-llm/RAG/probes/llama2_chat_7B_nq_user/accs_csv.csv --output /root/shared-nvme/RAG-llm/RAG/probes/llama2_chat_7B_nq_user/accs_heatmap.png --cmap turbo --bins 12 --discrete`
 
 ## 实验
 
@@ -65,26 +65,26 @@ python RAG/nq_hparam_search.py \
 --model_name llama2_chat_7B \
 --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
 --use_chat_template \
---probes_path RAG/probes/llama2_chat_7B_nq/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_probes.pkl \
---val_accs_path RAG/probes/llama2_chat_7B_nq/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_val_accs.npy \
---tuning_headwise_path RAG/features/llama2_chat_7B_nq/llama2_chat_7B_nq_head_wise.npy \
---tuning_labels_path RAG/features/llama2_chat_7B_nq/llama2_chat_7B_nq_labels.npy \
---scores_csv RAG/probes/llama2_chat_7B_nq/accs_csv.csv \
---alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies topk_48_by_score --results_root RAG/results/llama-2-chat-7b-nq/topk_48_by_score_alphas_5
+--probes_path RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama2_chat_7B_nq_user/llama2_chat_7B_nq_head_wise.npy \
+--tuning_labels_path RAG/features/llama2_chat_7B_nq_user/llama2_chat_7B_nq_labels.npy \
+--scores_csv RAG/probes/llama2_chat_7B_nq_user/accs_csv.csv \
+--alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies top_k_layers_llama2_chat_7B --results_root RAG/results/llama-2-chat-7b-nq-user/top_k_layers_llama2_chat_7B_alphas_5
 ```
 
   Trivia QA:
 ```bash
 python RAG/nq_hparam_search.py \
 --model_name llama2_chat_7B \
---dataset_path RAG/data/TriviaQA/test.jsonl \
+--dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl \
 --use_chat_template \
---probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_probes.pkl \
---val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_2_val_accs.npy \
---tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
---tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
---scores_csv RAG/results_dump/probes/accs_csv.csv \
---alphas 5 --probe_factor_modes both --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results_dump/llama-2-7b-instruct-layers_0_10_trivia_qa
+--probes_path RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama2_chat_7B_nq_user/llama2_chat_7B_nq_head_wise.npy \
+--tuning_labels_path RAG/features/llama2_chat_7B_nq_user/llama2_chat_7B_nq_labels.npy \
+--scores_csv RAG/probes/llama2_chat_7B_nq_user/accs_csv.csv \
+--alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies top_k_layers_llama2_chat_7B --results_root RAG/results/llama-2-chat-7b-triviaqa-user/top_k_layers_llama2_chat_7B_alphas_5
 ```
 
 - 产物：`results_dump/llama-2-7b-instruct-unified/` 下的逐次 summary 与最终汇总 CSV。
@@ -94,13 +94,13 @@ python RAG/nq_hparam_search.py \
 ```bash
 python RAG/causal_trace_experiment.py \
   --model_name llama2_chat_7B \
-  --dataset_path RAG/data/NQ/test_noise_test_noise3.jsonl \
+  --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
   --use_chat_template \
-  --probes_path RAG/probes/llama2_chat_7B_nq/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_probes.pkl \
-  --val_accs_path RAG/probes/llama2_chat_7B_nq/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_val_accs.npy \
-  --tuning_headwise_path RAG/features/llama2_chat_7B_nq/llama2_chat_7B_nq_head_wise.npy \
-  --tuning_labels_path RAG/features/llama2_chat_7B_nq/llama2_chat_7B_nq_labels.npy \
-  --alpha 5.0 --max_new_tokens 256 --output_csv RAG/results/llama-2-chat-7b-nq/causal_layer_trace_pf0.csv
+  --probes_path RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_probes.pkl \
+  --val_accs_path RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_user/llama2_chat_7B_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama2_chat_7B_nq_user/llama2_chat_7B_nq_labels.npy \
+  --alpha 5.0 --max_new_tokens 256 --output_csv RAG/results/llama-2-chat-7b-nq-user/causal_layer_trace_pf0.csv
 ```
 
 ## 前 k 层干预超参数搜索实验 (Based on Causal Trace)
@@ -125,19 +125,26 @@ python RAG/nq_layer_hparam_search.py \
 ```bash
 python RAG/nq_fine_grained_hparam_search.py \
   --model_name llama2_chat_7B \
-  --dataset_path RAG/data/NQ/test.jsonl \
-  --probes_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_probes.pkl \
-  --val_accs_path RAG/results_dump/probes/llama2_chat_7B_nq_seed_42_top_1024_folds_3_val_accs.npy \
-  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_head_wise.npy \
-  --tuning_labels_path RAG/features/llama2_chat_7B_nq_labels.npy \
-  --causal_trace_path RAG/causal_layer_trace_5_snippets_pf0.csv \
-  --head_scores_path /root/shared-nvme/RAG-llm/RAG/results_dump/probes/accs_csv.csv \
+  --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
+  --probes_path RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_probes.pkl \
+  --val_accs_path RAG/probes/llama2_chat_7B_nq_user/llama2_chat_7B_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama2_chat_7B_nq_user/llama2_chat_7B_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama2_chat_7B_nq_user/llama2_chat_7B_nq_labels.npy \
+  --causal_trace_path RAG/results/llama-2-chat-7b-nq-user/causal_layer_trace_pf0-0_10.csv \
+  --head_scores_path RAG/probes/llama2_chat_7B_nq_user/accs_csv.csv \
   --sample_size 100 \
-  --top_k_layers 7 \
-  --thresholds 0.7 \
-  --summary_csv RAG/fine_grained_intervention_results_5.csv \
+  --top_k_layers 6 \
+  --thresholds 0.6 \
+  --results_root RAG/results/llama-2-chat-7b-nq-user/nq_fine_grained \
+  --summary_csv result_top_6_layers_score_0.6.csv \
   --alphas 5 \
   --max_new_tokens 256
+```
+
+## CoN
+- 示例命令：
+```bash
+python RAG/nq_con_rag.py --model_name llama2_chat_7B --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/llama-2-chat-7b-nq-user/CON_300
 ```
 
 ## 评估指标

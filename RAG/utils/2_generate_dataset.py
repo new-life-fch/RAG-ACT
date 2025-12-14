@@ -45,6 +45,7 @@ def select_random_passages(positive_passages, negative_passages, random_seed=202
     
     # 组合结果：第一个positive + 随机选择的片段
     result = [first_positive] + selected_from_pool
+    # random.shuffle(result)
     
     return result
 
@@ -59,8 +60,8 @@ def generate_llama_answer(question, docs_texts, pipe):
     """
     # 构建提示词
     docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
-    system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
-    user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
+    system_prompt = prompt_dict['qa']['RAG_system']
+    user_prompt = prompt_dict['qa']['RAG_user'].format(paras=docs_block, question=question, answer='')
     
     # 构建 Llama 3.1 的消息列表
     messages = [
@@ -282,8 +283,8 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
 # --- 主程序 ---
 if __name__ == "__main__":
     # 新功能：生成新数据集
-    input_file = 'RAG/data/TriviaQA/trivia-dev-train.jsonl'
-    output_file = 'RAG/data/TriviaQA/llama_2_chat_7b_train.jsonl'
+    input_file = 'RAG/data/NQ/nq-dev-train.jsonl'
+    output_file = 'RAG/data/NQ/llama_2_chat_7b_train_user.jsonl'
     
     # 先用10条数据进行测试
     generate_new_dataset(input_file, output_file, num_samples=1500, random_seed=2025)

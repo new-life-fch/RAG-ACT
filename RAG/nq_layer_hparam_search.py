@@ -75,8 +75,8 @@ def build_nq_generation_inputs(
                 docs_texts.append(text.strip())
 
         docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
-        user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
+        system_prompt = prompt_dict['qa']['RAG_system']
+        user_prompt = prompt_dict['qa']['RAG_user'].format(paras=docs_block, question=question, answer='')
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
         inputs.append(input_ids)
@@ -186,29 +186,12 @@ def run_intervention(
         h_out = rearrange(head_output, 'b s (h d) -> b s h d', h=num_heads_calc)
         # last token by default
         start_idx = -1 if start_edit_location == 'lt' else -1
-        # 解析层索引
-        try:
-            layer_idx = int(str(layer_name).split('.')[2])
-        except Exception:
-            layer_idx = None
+
         for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
             direction_to_add = torch.tensor(direction).to(h_out.device)
             alpha_cur = alpha
             proj_mult = proj_val_std
             reliability = float(probe_factor)
-            try:
-                if layer_idx is not None:
-                    flat_idx = layer_idx * num_heads_calc + head
-                    clf = probes[flat_idx]
-                    w = torch.tensor(clf.coef_.reshape(-1), dtype=direction_to_add.dtype).to(h_out.device)
-                    b = float(getattr(clf, 'intercept_', [0.0])[0])
-                    x_vec = h_out[:, -1, head, :]
-                    logit = (x_vec @ w) + b
-                    dynamic_score = torch.sigmoid(logit)
-                else:
-                    dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=h_out.device)
-            except Exception:
-                dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=h_out.device)
             strength_base = alpha_cur * proj_mult * (reliability ** pf_gamma)
             if start_idx == -1:
                 # h_out[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add

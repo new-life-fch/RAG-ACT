@@ -13,6 +13,7 @@ from tqdm import tqdm
 from einops import rearrange
 
 import llama
+from transformers import AutoTokenizer
 from baukit import TraceDict
 from llama_utils import (
     _load_nq_jsonl,
@@ -28,7 +29,7 @@ from utils.prompts_templates import prompt_dict
 # 模型路径映射
 HF_NAMES = {
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
-    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct',
+    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
 }
 
 def build_nq_generation_inputs(
@@ -67,8 +68,8 @@ def build_nq_generation_inputs(
                 docs_texts.append(text.strip())
 
         docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
-        user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
+        system_prompt = prompt_dict['qa']['RAG_system']
+        user_prompt = prompt_dict['qa']['RAG_user'].format(paras=docs_block, question=question, answer='')
 
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
@@ -156,33 +157,33 @@ def run_layer_intervention(
              return head_output # Should not happen if TraceDict is set up correctly
 
         for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
-            direction_to_add = torch.tensor(direction).to(h_out.device)
+            direction_to_add = torch.tensor(direction, dtype=h_out.dtype, device=h_out.device)
             
             # 计算动态强度
             reliability = float(probe_factor) if probe_factor is not None else 1.0
             # strength = alpha * proj_val_std * reliability
             strength = alpha * proj_val_std * 1
             
-            # 动态抑制逻辑：使用探针分类器判断当前激活是否已经是 True
-            # 如果已经是 True，则减弱干预（可选，参考 nq_hparam_search.py）
-            try:
-                flat_idx = layer_idx * num_heads + head
-                clf = probes[flat_idx]
-                w = torch.tensor(clf.coef_.reshape(-1), dtype=direction_to_add.dtype).to(h_out.device)
-                b = float(getattr(clf, 'intercept_', [0.0])[0])
-                x_vec = h_out[:, -1, head, :] # 取最后一个 token
-                logit = (x_vec @ w) + b
-                dynamic_score = torch.sigmoid(logit)
-            except Exception:
-                dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=h_out.device)
+            # # 动态抑制逻辑：使用探针分类器判断当前激活是否已经是 True
+            # # 如果已经是 True，则减弱干预（可选，参考 nq_hparam_search.py）
+            # try:
+            #     flat_idx = layer_idx * num_heads + head
+            #     clf = probes[flat_idx]
+            #     w = torch.tensor(clf.coef_.reshape(-1), dtype=h_out.dtype, device=h_out.device)
+            #     b = torch.tensor(getattr(clf, 'intercept_', [0.0])[0], dtype=h_out.dtype, device=h_out.device)
+            #     x_vec = h_out[:, -1, head, :].to(h_out.dtype)
+            #     logit = (x_vec @ w) + b
+            #     dynamic_score = torch.sigmoid(logit)
+            # except Exception:
+            #     dynamic_score = torch.tensor(0.0, dtype=h_out.dtype, device=h_out.device)s
 
-            # 最终干预向量
-            # 这里我们采用简单的加法干预，不使用 (1 - dynamic_score) 动态门控，除非明确要求
-            # 为了与 nq_hparam_search.py 保持一致，我们加入 dynamic_score 的影响，但这里我们简化为直接叠加
-            # 为了“因果追踪”的简化版实验，我们主要关注干预带来的变化，因此采用最直接的叠加
-            # 若要完全复刻 nq_hparam_search.py 的逻辑:
-            # h_out[:, -1, head, :] += (strength * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
-            # 这里我们简化，假设我们想观察该层的“最大潜力”，因此不进行动态抑制，或者设 dynamic_score 为 0
+            # # 最终干预向量
+            # # 这里我们采用简单的加法干预，不使用 (1 - dynamic_score) 动态门控，除非明确要求
+            # # 为了与 nq_hparam_search.py 保持一致，我们加入 dynamic_score 的影响，但这里我们简化为直接叠加
+            # # 为了“因果追踪”的简化版实验，我们主要关注干预带来的变化，因此采用最直接的叠加
+            # # 若要完全复刻 nq_hparam_search.py 的逻辑:
+            # # h_out[:, -1, head, :] += (strength * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
+            # # 这里我们简化，假设我们想观察该层的“最大潜力”，因此不进行动态抑制，或者设 dynamic_score 为 0
             
             h_out[:, -1, head, :] += strength * direction_to_add
 
@@ -215,7 +216,7 @@ def main():
     parser.add_argument('--dataset_path', type=str, default='/root/shared-nvme/RAG-llm/RAG/data/test.jsonl')
     parser.add_argument('--use_chat_template', action='store_true')
     parser.add_argument('--max_docs', type=int, default=5)
-    parser.add_argument('--sample_size', type=int, default=100) # 默认跑50条，速度快一点
+    parser.add_argument('--sample_size', type=int, default=100) # 默认跑100条，速度快一点
     parser.add_argument('--sample_seed', type=int, default=2025)
     parser.add_argument('--head_dim', type=int, default=128)
     parser.add_argument('--num_heads', type=int, default=32) # Llama 2 7B 默认 32 头
@@ -239,7 +240,7 @@ def main():
         raise ValueError(f"不支持的模型名: {args.model_name}")
 
     print(f"Loading model: {args.model_name}...")
-    tokenizer = llama.LlamaTokenizerFast.from_pretrained(MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL)
     dtype = torch.bfloat16 if 'llama3' in args.model_name else torch.float16
     model = llama.LlamaForCausalLM.from_pretrained(MODEL, low_cpu_mem_usage=True, torch_dtype=dtype, device_map='auto')
     device = model.device
@@ -318,6 +319,7 @@ def main():
     sorted_results = sorted(results, key=lambda x: x['Score'], reverse=True)
 
     print(f"Saving results to {args.output_csv}...")
+    os.makedirs(os.path.dirname(args.output_csv) or '.', exist_ok=True)
     with open(args.output_csv, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=['layer', 'EM', 'F1', 'Delta_EM', 'Delta_F1', 'Score'])
         writer.writeheader()

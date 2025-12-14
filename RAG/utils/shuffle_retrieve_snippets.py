@@ -14,7 +14,7 @@ python RAG/utils/shuffle_retrieve_snippets.py --seed 2025
 
 处理自定义文件：
 python RAG/utils/shuffle_retrieve_snippets.py \
-  --inputs /path/to/a.jsonl /path/to/b.jsonl --seed 2025
+  --inputs RAG/data/NQ/test_noise_test_noise0.jsonl RAG/data/NQ/test_noise_test_noise1.jsonl RAG/data/NQ/test_noise_test_noise2.jsonl RAG/data/NQ/test_noise_test_noise3.jsonl RAG/data/NQ/test_noise_test_noise4.jsonl RAG/data/NQ/test_noise_test_noise5.jsonl --seed 2025
 """
 
 import argparse

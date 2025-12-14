@@ -14,6 +14,7 @@ from einops import rearrange
 
 import llama
 from baukit import TraceDict
+from transformers import AutoTokenizer
 from llama_utils import (
     _load_nq_jsonl,
     _build_messages_input,
@@ -68,8 +69,8 @@ def build_nq_generation_inputs(
                 docs_texts.append(text.strip())
 
         docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
-        user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
+        system_prompt = prompt_dict['qa']['RAG_system']
+        user_prompt = prompt_dict['qa']['RAG_user'].format(paras=docs_block, question=question, answer='')
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
         inputs.append(input_ids)
@@ -126,25 +127,18 @@ def make_selection_strategies(
     strategies['layers_5_15'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(15)]
     strategies['layers_10_15'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(15)]
     strategies['layers_15_20'] = [(l, h) for (l, h, s) in scores if 15 <= l < clamp_end(20)]
-    strategies['layers_7_16'] = [(l, h) for (l, h, s) in scores if 7 <= l < clamp_end(16)]
+    strategies['layers_7_15'] = [(l, h) for (l, h, s) in scores if 7 <= l < clamp_end(15)]
 
     # Top Layers from Causal Trace Experiment
-    strategies['top_3_layers'] = [(l, h) for (l, h, s) in scores if l in [8, 10, 7]]
-
-    strategies['top_5_layers'] = [(l, h) for (l, h, s) in scores if l in [5,3,10,2,20]]
-    # Top 10 layers: 8, 10, 7, 12, 13, 9, 11, 17, 5, 6
-    strategies['top_10_layers'] = [(l, h) for (l, h, s) in scores if l in [8, 10, 7, 12, 13, 9, 11, 17, 5, 6]]
-    strategies['top_15_layers'] = [(l, h) for (l, h, s) in scores if l in [8, 10, 7, 12, 13, 9, 11, 17, 5, 6, 22, 24, 30, 26, 21]]
-    strategies['top_20_layers'] = [(l, h) for (l, h, s) in scores if l in [8, 10, 7, 12, 13, 9, 11, 17, 5, 6, 22, 24, 30, 26, 21, 4, 29, 3, 25, 23]]
-    strategies['top_25_layers'] = [(l, h) for (l, h, s) in scores if l in [8, 10, 7, 12, 13, 9, 11, 17, 5, 6, 22, 24, 30, 26, 21, 4, 29, 3, 25, 23, 16, 0, 19, 20, 18]]
+    strategies['top_k_layers_llama2_chat_7B'] = [(l, h) for (l, h, s) in scores if l in [2,3,4,5,6,7,10]]
+    strategies['top_k_layers_llama3_8B_instruct'] = [(l, h) for (l, h, s) in scores if l in [10, 4, 5, 6, 8, 3, 22]]
     
-
 
     # 全部头
     strategies['all_heads'] = [(l, h) for (l, h, s) in scores]
 
     # 全局 top-k
-    for k in [24, 48, 64, 128, 256, 512]:
+    for k in [48, 128, 256, 512, 768, 896, 1024]:
         kk = min(k, len(by_score))
         strategies[f'topk_{kk}_by_score'] = [(l, h) for (l, h, s) in by_score[:kk]]
 
@@ -250,25 +244,25 @@ def run_intervention(
         except Exception:
             layer_idx = None
         for head, direction, proj_val_std, probe_factor in interventions[layer_name]:
-            direction_to_add = torch.tensor(direction).to(h_out.device)
+            direction_to_add = torch.tensor(direction, dtype=h_out.dtype, device=h_out.device)
             alpha_cur = alpha
             if (alpha_per_layer is not None) and (layer_idx is not None) and (layer_idx in alpha_per_layer):
                 alpha_cur = alpha_per_layer[layer_idx]
             proj_mult = proj_val_std
             reliability = float(probe_factor)
-            try:
-                if layer_idx is not None:
-                    flat_idx = layer_idx * num_heads_calc + head
-                    clf = probes[flat_idx]
-                    w = torch.tensor(clf.coef_.reshape(-1), dtype=direction_to_add.dtype).to(h_out.device)
-                    b = float(getattr(clf, 'intercept_', [0.0])[0])
-                    x_vec = h_out[:, -1, head, :]
-                    logit = (x_vec @ w) + b
-                    dynamic_score = torch.sigmoid(logit)
-                else:
-                    dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=h_out.device)
-            except Exception:
-                dynamic_score = torch.tensor(0.0, dtype=direction_to_add.dtype, device=h_out.device)
+            # try:
+            #     if layer_idx is not None:
+            #         flat_idx = layer_idx * num_heads_calc + head
+            #         clf = probes[flat_idx]
+            #         w = torch.tensor(clf.coef_.reshape(-1), dtype=h_out.dtype, device=h_out.device)
+            #         b = torch.tensor(getattr(clf, 'intercept_', [0.0])[0], dtype=h_out.dtype, device=h_out.device)
+            #         x_vec = h_out[:, -1, head, :].to(h_out.dtype)
+            #         logit = (x_vec @ w) + b
+            #         dynamic_score = torch.sigmoid(logit)
+            #     else:
+            #         dynamic_score = torch.tensor(0.0, dtype=h_out.dtype, device=h_out.device)
+            # except Exception:
+            #     dynamic_score = torch.tensor(0.0, dtype=h_out.dtype, device=h_out.device)
             strength_base = alpha_cur * proj_mult * (reliability ** pf_gamma)
             if start_idx == -1:
                 # h_out[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
@@ -405,13 +399,23 @@ def main():
     if MODEL is None:
         raise ValueError(f"不支持的模型名: {args.model_name}")
 
-    tokenizer = llama.LlamaTokenizerFast.from_pretrained(MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL)
     dtype = torch.bfloat16 if 'llama3' in args.model_name else torch.float16
     model = llama.LlamaForCausalLM.from_pretrained(MODEL, low_cpu_mem_usage=True, torch_dtype=dtype, device_map='auto')
     device = model.device
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model.generation_config.pad_token_id = tokenizer.pad_token_id
+    try:
+        model.generation_config.do_sample = False
+        if hasattr(model.generation_config, 'temperature'):
+            model.generation_config.temperature = None
+        if hasattr(model.generation_config, 'top_p'):
+            model.generation_config.top_p = None
+        if hasattr(model.generation_config, 'top_k'):
+            model.generation_config.top_k = None
+    except Exception:
+        pass
 
     # 构造输入
     inputs, gold_answers_list = build_nq_generation_inputs(

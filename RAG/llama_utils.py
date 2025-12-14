@@ -287,8 +287,8 @@ def tokenized_nq_with_docs_dual(
 
         # 构造系统/用户提示词（强调“基于给定文档作答，仅输出直接答案”）
         docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = prompt_dict['qa']['naive_RAG_system'].format(paras=docs_block)
-        user_prompt = prompt_dict['qa']['naive_RAG_user'].format(question=question, answer='')
+        system_prompt = prompt_dict['qa']['RAG_system']
+        user_prompt = prompt_dict['qa']['RAG_user'].format(paras=docs_block, question=question, answer='')
 
         # 正确答案（label=1），将答案作为助手消息以实现 teacher forcing
         correct_answer = answers[0]
@@ -1069,11 +1069,17 @@ def get_interventions_dict(top_heads, probes, tuning_activations, num_heads, use
             direction = np.random.normal(size=(128,))
         else:
             direction = probes[layer_head_to_flattened_idx(layer, head, num_heads)].coef_
-        direction = direction / np.linalg.norm(direction)
+        direction = direction.astype(np.float32, copy=False)
+        norm = np.linalg.norm(direction)
+        if np.isfinite(norm) and norm > 1e-12:
+            direction = direction / norm
+        else:
+            direction = np.zeros_like(direction)
 
-        activations = tuning_activations[:, layer, head, :]  # batch x 128
+        activations = tuning_activations[:, layer, head, :]
+        activations = activations.astype(np.float32, copy=False)
         proj_vals = activations @ direction.T
-        proj_val_std = np.std(proj_vals)
+        proj_val_std = float(np.std(proj_vals))
 
         probe_factor = 1.0
         if probe_score_map is not None:
