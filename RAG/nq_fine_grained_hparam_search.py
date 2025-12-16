@@ -28,7 +28,7 @@ from utils.prompts_templates import prompt_dict
 # 模型路径映射
 HF_NAMES = {
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
-    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct',
+    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
 }
 
 def load_layer_order_from_csv(csv_path: str) -> List[int]:
@@ -380,10 +380,11 @@ def main():
     if MODEL is None:
         raise ValueError(f"不支持的模型名: {args.model_name}")
 
-    tokenizer = llama.LlamaTokenizerFast.from_pretrained(MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL)
     dtype = torch.bfloat16 if 'llama3' in args.model_name else torch.float16
     model = llama.LlamaForCausalLM.from_pretrained(MODEL, low_cpu_mem_usage=True, torch_dtype=dtype, device_map='auto')
     device = model.device
+    tokenizer.padding_side = 'left'
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model.generation_config.pad_token_id = tokenizer.pad_token_id

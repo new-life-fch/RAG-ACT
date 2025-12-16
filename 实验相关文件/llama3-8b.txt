@@ -1,0 +1,68 @@
+采集激活
+python RAG/llama_get_activations.py --model_name llama3_8B_instruct --dataset_name nq --use_chat_template --nq_jsonl RAG/data/NQ/llama_3_8b_instruct_train_user.jsonl --output_dir RAG/features/llama3_8B_instruct_nq_user
+
+训练探针
+python RAG/train_save_probes.py --model_name llama3_8B_instruct --num_heads 32 --head_dim 128 --feat_dir RAG/features/llama3_8B_instruct_nq_user --save_dir RAG/probes/llama3_8B_instruct_nq_user --cv_final_train full
+
+获取探针分数
+python RAG/utils/inspect_probes.py RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_val_accs.npy --out-csv RAG/probes/llama3_8B_instruct_nq_user/accs_csv.csv
+
+热力图
+python RAG/utils/plot_probe_heatmap.py /root/shared-nvme/RAG-llm/RAG/probes/llama3_8B_instruct_nq_user/accs_csv.csv --output /root/shared-nvme/RAG-llm/RAG/probes/llama3_8B_instruct_nq_user/accs_heatmap.png --cmap turbo --bins 12 --discrete
+
+因果追踪
+python RAG/causal_trace_experiment.py \
+  --model_name llama3_8B_instruct \
+  --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
+  --use_chat_template \
+  --probes_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_probes.pkl \
+  --val_accs_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
+  --alpha 5.0 --max_new_tokens 256 --output_csv RAG/results/llama-3-8b-instruct-nq-user/causal_layer_trace_pf0.csv --sample_size 50
+
+细粒度超参数搜索实验
+python RAG/nq_fine_grained_hparam_search.py \
+  --model_name llama3_8B_instruct \
+  --dataset_path RAG/data/NQ/test_noise_test_noise3.jsonl \
+  --probes_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_probes.pkl \
+  --val_accs_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+  --tuning_headwise_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_head_wise.npy \
+  --tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
+  --causal_trace_path RAG/results/llama-3-8b-instruct-nq-user/causal_layer_trace_pf0.csv \
+  --head_scores_path RAG/probes/llama3_8B_instruct_nq_user/accs_csv.csv \
+  --sample_size 100 \
+  --top_k_layers 7 \
+  --thresholds 0.8,0.75,0.7,0.65,0.6,0.55,0.48 \
+  --results_root RAG/results/llama-3-8b-instruct-nq-user/nq_fine_grained \
+  --summary_csv Rfine_grained_intervention_results_alpha_5.csv \
+  --alphas 5 \
+  --max_new_tokens 256
+
+
+NQ实验
+python RAG/nq_hparam_search.py \
+--model_name llama3_8B_instruct \
+--dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
+--use_chat_template \
+--probes_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_head_wise.npy \
+--tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
+--scores_csv RAG/probes/llama3_8B_instruct_nq_user/accs_csv.csv \
+--alphas 39,40,41 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_8_by_score --results_root RAG/results/llama-3-8b-instruct-nq-user/topk_8_by_score_alphas_40 --sample_size 100
+
+超参
+python RAG/nq_hparam_search_topk_alpha.py \
+--model_name llama3_8B_instruct \
+--dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
+--use_chat_template \
+--probes_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_head_wise.npy \
+--tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
+--scores_csv RAG/probes/llama3_8B_instruct_nq_user/accs_csv.csv \
+--results_root RAG/results/llama3_alpha_search \
+--sample_size 100 \
+--max_new_tokens 256
+

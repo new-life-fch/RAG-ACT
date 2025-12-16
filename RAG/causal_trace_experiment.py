@@ -164,27 +164,6 @@ def run_layer_intervention(
             # strength = alpha * proj_val_std * reliability
             strength = alpha * proj_val_std * 1
             
-            # # 动态抑制逻辑：使用探针分类器判断当前激活是否已经是 True
-            # # 如果已经是 True，则减弱干预（可选，参考 nq_hparam_search.py）
-            # try:
-            #     flat_idx = layer_idx * num_heads + head
-            #     clf = probes[flat_idx]
-            #     w = torch.tensor(clf.coef_.reshape(-1), dtype=h_out.dtype, device=h_out.device)
-            #     b = torch.tensor(getattr(clf, 'intercept_', [0.0])[0], dtype=h_out.dtype, device=h_out.device)
-            #     x_vec = h_out[:, -1, head, :].to(h_out.dtype)
-            #     logit = (x_vec @ w) + b
-            #     dynamic_score = torch.sigmoid(logit)
-            # except Exception:
-            #     dynamic_score = torch.tensor(0.0, dtype=h_out.dtype, device=h_out.device)s
-
-            # # 最终干预向量
-            # # 这里我们采用简单的加法干预，不使用 (1 - dynamic_score) 动态门控，除非明确要求
-            # # 为了与 nq_hparam_search.py 保持一致，我们加入 dynamic_score 的影响，但这里我们简化为直接叠加
-            # # 为了“因果追踪”的简化版实验，我们主要关注干预带来的变化，因此采用最直接的叠加
-            # # 若要完全复刻 nq_hparam_search.py 的逻辑:
-            # # h_out[:, -1, head, :] += (strength * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
-            # # 这里我们简化，假设我们想观察该层的“最大潜力”，因此不进行动态抑制，或者设 dynamic_score 为 0
-            
             h_out[:, -1, head, :] += strength * direction_to_add
 
         return rearrange(h_out, 'b s h d -> b s (h d)')
@@ -244,6 +223,7 @@ def main():
     dtype = torch.bfloat16 if 'llama3' in args.model_name else torch.float16
     model = llama.LlamaForCausalLM.from_pretrained(MODEL, low_cpu_mem_usage=True, torch_dtype=dtype, device_map='auto')
     device = model.device
+    tokenizer.padding_side = 'left'
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model.generation_config.pad_token_id = tokenizer.pad_token_id

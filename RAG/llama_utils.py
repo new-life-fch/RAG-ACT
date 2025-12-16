@@ -212,25 +212,34 @@ def _build_messages_input(tokenizer, system_prompt: str, user_prompt: str, assis
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+    
+    # 判断是否为 Teacher Forcing 模式（已有助手回答）
+    is_inference = (assistant_content is None)
+    
     if assistant_content is not None:
         messages.append({"role": "assistant", "content": assistant_content})
 
     if use_chat_template:
         try:
-            templated_text = tokenizer.apply_chat_template(messages, add_generation_prompt=False)
-            return tokenizer(templated_text, return_tensors='pt').input_ids
-        except Exception:
+            # 1. 直接指定 return_tensors='pt'，让 HF 处理类型转换
+            # 2. 动态设置 add_generation_prompt：
+            #    - 推理模式 (True): 添加 assistant header，提示模型开始生成
+            #    - 训练模式 (False): 结尾已经是 assistant 的内容，无需添加 prompt
+            input_ids = tokenizer.apply_chat_template(
+                messages, 
+                add_generation_prompt=is_inference, 
+                return_tensors='pt' 
+            )
+            return input_ids
+        except Exception as e:
+            # 兜底逻辑（建议打印日志，而不是默默 pass，方便排查）
+            print(f"Template application failed: {e}")
             pass
+    
+    # 这里的兜底逻辑需要非常小心，Llama 2/3 不建议手动拼接字符串
+    # 暂时保持简单处理或抛出异常
+    return None
 
-    # 回退：直接拼接 system + user + assistant 文本（尽量保持简单清晰）
-    parts = [
-        f"[SYSTEM]\n{system_prompt}\n[/SYSTEM]",
-        f"[USER]\n{user_prompt}\n[/USER]",
-    ]
-    if assistant_content is not None:
-        parts.append(f"[ASSISTANT]\n{assistant_content}\n[/ASSISTANT]")
-    text = "\n\n".join(parts)
-    return tokenizer(text, return_tensors='pt').input_ids
 
 
 def tokenized_nq_with_docs_dual(

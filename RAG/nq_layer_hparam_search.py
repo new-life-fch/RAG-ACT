@@ -11,6 +11,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from einops import rearrange
+from transformers import AutoTokenizer
 
 import llama
 from baukit import TraceDict
@@ -28,15 +29,12 @@ from utils.prompts_templates import prompt_dict
 # 模型路径映射
 HF_NAMES = {
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
-    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3.1-8B-Instruct',
+    'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
 }
 
 # 从 causal_layer_trace.csv 中读取的层排序 (Score = Delta_EM + Delta_F1 降序)
 LAYER_ORDER = [
-    8, 10, 7, 12, 13, 9, 11, 17, 5, 6, 
-    22, 24, 30, 26, 21, 4, 29, 3, 25, 23, 
-    16, 0, 19, 20, 18, 1, 2, 27, 28, 31, 
-    15, 14
+    11,2,13,15,16,12,10,8,6,31,26,20,27,23
 ]
 
 def build_nq_generation_inputs(
@@ -298,7 +296,7 @@ def main():
 
     # 移除 composites 相关参数
 
-    parser.add_argument('--timeout_minutes', type=float, default=15.0,
+    parser.add_argument('--timeout_minutes', type=float, default=3.0,
                         help='单次实验的最长运行时间（分钟），超过则中断并进入下一组参数')
     parser.add_argument('--skip_if_exists', action='store_true',
                         help='若当前实验的 summary 文件已存在则跳过执行')
@@ -320,10 +318,11 @@ def main():
     if MODEL is None:
         raise ValueError(f"不支持的模型名: {args.model_name}")
 
-    tokenizer = llama.LlamaTokenizerFast.from_pretrained(MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL)
     dtype = torch.bfloat16 if 'llama3' in args.model_name else torch.float16
     model = llama.LlamaForCausalLM.from_pretrained(MODEL, low_cpu_mem_usage=True, torch_dtype=dtype, device_map='auto')
     device = model.device
+    tokenizer.padding_side = 'left'
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model.generation_config.pad_token_id = tokenizer.pad_token_id

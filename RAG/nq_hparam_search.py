@@ -130,7 +130,7 @@ def make_selection_strategies(
     strategies['layers_7_15'] = [(l, h) for (l, h, s) in scores if 7 <= l < clamp_end(15)]
 
     # Top Layers from Causal Trace Experiment
-    strategies['top_k_layers_llama2_chat_7B'] = [(l, h) for (l, h, s) in scores if l in [2,3,4,5,6,7,10]]
+    strategies['top_k_layers_llama2_chat_7B'] = [(l, h) for (l, h, s) in scores if l in [11,2,13,15,16,12,10,8,6]]
     strategies['top_k_layers_llama3_8B_instruct'] = [(l, h) for (l, h, s) in scores if l in [10, 4, 5, 6, 8, 3, 22]]
     
 
@@ -138,7 +138,7 @@ def make_selection_strategies(
     strategies['all_heads'] = [(l, h) for (l, h, s) in scores]
 
     # 全局 top-k
-    for k in [48, 128, 256, 512, 768, 896, 1024]:
+    for k in [6, 8, 12, 24, 32, 48, 64, 96, 128, 256, 512, 768, 896, 1024]:
         kk = min(k, len(by_score))
         strategies[f'topk_{kk}_by_score'] = [(l, h) for (l, h, s) in by_score[:kk]]
 
@@ -250,19 +250,6 @@ def run_intervention(
                 alpha_cur = alpha_per_layer[layer_idx]
             proj_mult = proj_val_std
             reliability = float(probe_factor)
-            # try:
-            #     if layer_idx is not None:
-            #         flat_idx = layer_idx * num_heads_calc + head
-            #         clf = probes[flat_idx]
-            #         w = torch.tensor(clf.coef_.reshape(-1), dtype=h_out.dtype, device=h_out.device)
-            #         b = torch.tensor(getattr(clf, 'intercept_', [0.0])[0], dtype=h_out.dtype, device=h_out.device)
-            #         x_vec = h_out[:, -1, head, :].to(h_out.dtype)
-            #         logit = (x_vec @ w) + b
-            #         dynamic_score = torch.sigmoid(logit)
-            #     else:
-            #         dynamic_score = torch.tensor(0.0, dtype=h_out.dtype, device=h_out.device)
-            # except Exception:
-            #     dynamic_score = torch.tensor(0.0, dtype=h_out.dtype, device=h_out.device)
             strength_base = alpha_cur * proj_mult * (reliability ** pf_gamma)
             if start_idx == -1:
                 # h_out[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
@@ -376,12 +363,7 @@ def main():
     parser.add_argument('--probe_factor_modes', type=str, default='both', choices=['both','true','false'],
                         help='是否乘探针分数：both/true/false')
 
-    # 复合方案与运行控制
-    parser.add_argument('--composites', type=str, default=None,
-                        help='逗号分隔的复合强度方案（alphamap），例如: 0-9=5+20-31=15,0-9=5+10-19=10+20-31=15')
-    parser.add_argument('--composites_only', action='store_true',
-                        help='仅运行复合方案（不跑单策略）')
-    parser.add_argument('--timeout_minutes', type=float, default=15.0,
+    parser.add_argument('--timeout_minutes', type=float, default=3.0,
                         help='单次实验的最长运行时间（分钟），超过则中断并进入下一组参数')
     parser.add_argument('--skip_if_exists', action='store_true',
                         help='若当前实验的 summary 文件已存在则跳过执行')
@@ -403,19 +385,10 @@ def main():
     dtype = torch.bfloat16 if 'llama3' in args.model_name else torch.float16
     model = llama.LlamaForCausalLM.from_pretrained(MODEL, low_cpu_mem_usage=True, torch_dtype=dtype, device_map='auto')
     device = model.device
+    tokenizer.padding_side = 'left'
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model.generation_config.pad_token_id = tokenizer.pad_token_id
-    try:
-        model.generation_config.do_sample = False
-        if hasattr(model.generation_config, 'temperature'):
-            model.generation_config.temperature = None
-        if hasattr(model.generation_config, 'top_p'):
-            model.generation_config.top_p = None
-        if hasattr(model.generation_config, 'top_k'):
-            model.generation_config.top_k = None
-    except Exception:
-        pass
 
     # 构造输入
     inputs, gold_answers_list = build_nq_generation_inputs(
@@ -494,65 +467,36 @@ def main():
 
     summary_rows = []
 
-    # 解析复合方案（若指定 composites 或 composites_only）
-    composite_specs: List[str] = []
-    if args.composites:
-        composite_specs = [s.strip() for s in args.composites.split(',') if s.strip()]
-
-    def parse_composite_spec(spec: str) -> Tuple[str, Dict[int, float], List[Tuple[int,int]], str]:
-        # 形如："0-9=5+20-31=15"
-        import re
-        segs = [p.strip() for p in spec.split('+') if p.strip()]
-        alpha_map: Dict[int, float] = {}
-        heads_union: List[Tuple[int,int]] = []
-        alpha_tag_parts = []
-        comp_keys = []
-        for seg in segs:
-            m = re.match(r'^(\d+)\s*-\s*(\d+)\s*=\s*([0-9]*\.?[0-9]+)$', seg)
-            if not m:
-                raise ValueError(f'无法解析复合段: {seg}')
-            s = int(m.group(1)); e = int(m.group(2)); val = float(m.group(3))
-            key = f'layers_{s}_{e}' if e == 31 else f'layers_{s}_{e+1}'
-            if key not in selection_map:
-                raise ValueError(f'复合段对应的策略不存在: {key}')
-            heads_union.extend(selection_map[key])
-            for l in range(s, min(e+1, L)):
-                alpha_map[l] = val
-            alpha_tag_parts.append(f'{s}-{e}={val}')
-            comp_keys.append(key)
-        comp_name = '+'.join(comp_keys)
-        alpha_tag = '_'.join(alpha_tag_parts).replace('-', '_')
-        return comp_name, alpha_map, list(set(heads_union)), alpha_tag
-
-    # 先运行复合方案（若指定 composites_only 或 composites 不为空且优先）
-    if composite_specs:
-        for spec in composite_specs:
-            comp_name, alpha_map, comp_heads, alpha_tag = parse_composite_spec(spec)
-            unique_heads = sorted(list({(l, h) for (l, h) in comp_heads}))
-            if args.limit_per_strategy and len(unique_heads) > args.limit_per_strategy:
-                unique_heads = sorted(unique_heads, key=lambda lh: score_map.get(lh, 0.0), reverse=True)[:args.limit_per_strategy]
-            k_count = len(unique_heads)
-            if not k_count:
-                continue
+    # 运行单策略网格
+    for sel_name, sel_heads in selection_map.items():
+        unique_heads = sorted(list({(l, h) for (l, h) in sel_heads}))
+        if args.limit_per_strategy and len(unique_heads) > args.limit_per_strategy:
+            unique_heads = sorted(unique_heads, key=lambda lh: score_map.get(lh, 0.0), reverse=True)[:args.limit_per_strategy]
+        k_count = len(unique_heads)
+        if k_count == 0:
+            continue
+        for alpha in alphas:
             for use_pf in use_probe_factors:
-                sum_path = os.path.join(sum_dir, f"nq_unified_{comp_name}_alphamap_{alpha_tag}_pf{int(use_pf)}_summary.json")
+                sum_path = os.path.join(sum_dir, f"nq_unified_{sel_name}_alpha{alpha}_pf{int(use_pf)}_summary.json")
                 if args.skip_if_exists and os.path.exists(sum_path):
                     print(f"[Skip] exists: {sum_path}")
                     continue
                 preds, summary = run_intervention(
                     model, tokenizer, device, inputs, gold_answers_list,
-                    0.0, comp_name, unique_heads, probes, tuning_headwise,
+                    float(alpha), sel_name, unique_heads, probes, tuning_headwise,
                     args.head_dim, args.num_heads, use_pf, 
-                    val_accs, args.max_new_tokens, args.timeout_minutes, alpha_map,
+                    val_accs, args.max_new_tokens, args.timeout_minutes, None,
                     com_directions=com_directions, pf_gamma=args.pf_gamma,
                 )
-                ans_path = os.path.join(ans_dir, f"nq_unified_{comp_name}_alphamap_{alpha_tag}_pf{int(use_pf)}_answers.jsonl")
+
+                ans_path = os.path.join(ans_dir, f"nq_unified_{sel_name}_alpha{alpha}_pf{int(use_pf)}_answers.jsonl")
                 with open(ans_path, 'w', encoding='utf-8') as f:
                     for pred, golds in zip(preds, gold_answers_list):
                         f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
+
                 out_summary = {
-                    "EM": summary["EM"], "F1": summary["F1"], "alpha": "map",
-                    "alpha_map": alpha_tag, "model_name": args.model_name, "intervention": comp_name,
+                    "EM": summary["EM"], "F1": summary["F1"], "alpha": float(alpha),
+                    "model_name": args.model_name, "intervention": sel_name,
                     "use_probe_factor": bool(use_pf), "num_heads_selected": k_count,
                     "sample_size": args.sample_size,
                     "timed_out": bool(summary.get("timed_out", False)),
@@ -561,68 +505,18 @@ def main():
                 }
                 with open(sum_path, 'w', encoding='utf-8') as f:
                     json.dump(out_summary, f, ensure_ascii=False, indent=2)
+
                 d_em = out_summary["EM"] - baseline_sum["EM"]
                 d_f1 = out_summary["F1"] - baseline_sum["F1"]
                 status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
                 print((
-                    f"[Intervene:{status}] strategy={comp_name} heads={k_count} alphamap={alpha_tag} pf={int(use_pf)} "
+                    f"[Intervene:{status}] strategy={sel_name} heads={k_count} alpha={alpha} pf={int(use_pf)} "
                     f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
                     f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
                 ))
+
                 if not out_summary["timed_out"]:
-                    summary_rows.append([comp_name, k_count, f'map_{alpha_tag}', int(use_pf), out_summary["EM"], out_summary["F1"]])
-
-    # 若 composites_only，则跳过单策略网格
-    if not args.composites_only:
-        for sel_name, sel_heads in selection_map.items():
-            unique_heads = sorted(list({(l, h) for (l, h) in sel_heads}))
-            if args.limit_per_strategy and len(unique_heads) > args.limit_per_strategy:
-                unique_heads = sorted(unique_heads, key=lambda lh: score_map.get(lh, 0.0), reverse=True)[:args.limit_per_strategy]
-            k_count = len(unique_heads)
-            if k_count == 0:
-                continue
-            for alpha in alphas:
-                for use_pf in use_probe_factors:
-                    sum_path = os.path.join(sum_dir, f"nq_unified_{sel_name}_alpha{alpha}_pf{int(use_pf)}_summary.json")
-                    if args.skip_if_exists and os.path.exists(sum_path):
-                        print(f"[Skip] exists: {sum_path}")
-                        continue
-                    preds, summary = run_intervention(
-                        model, tokenizer, device, inputs, gold_answers_list,
-                        float(alpha), sel_name, unique_heads, probes, tuning_headwise,
-                        args.head_dim, args.num_heads, use_pf, 
-                        val_accs, args.max_new_tokens, args.timeout_minutes, None,
-                        com_directions=com_directions, pf_gamma=args.pf_gamma,
-                    )
-
-                    ans_path = os.path.join(ans_dir, f"nq_unified_{sel_name}_alpha{alpha}_pf{int(use_pf)}_answers.jsonl")
-                    with open(ans_path, 'w', encoding='utf-8') as f:
-                        for pred, golds in zip(preds, gold_answers_list):
-                            f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
-
-                    out_summary = {
-                        "EM": summary["EM"], "F1": summary["F1"], "alpha": float(alpha),
-                        "model_name": args.model_name, "intervention": sel_name,
-                        "use_probe_factor": bool(use_pf), "num_heads_selected": k_count,
-                        "sample_size": args.sample_size,
-                        "timed_out": bool(summary.get("timed_out", False)),
-                        "num_completed": int(summary.get("num_completed", len(preds))),
-                        "elapsed_min": float(summary.get("elapsed_min", 0.0)),
-                    }
-                    with open(sum_path, 'w', encoding='utf-8') as f:
-                        json.dump(out_summary, f, ensure_ascii=False, indent=2)
-
-                    d_em = out_summary["EM"] - baseline_sum["EM"]
-                    d_f1 = out_summary["F1"] - baseline_sum["F1"]
-                    status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
-                    print((
-                        f"[Intervene:{status}] strategy={sel_name} heads={k_count} alpha={alpha} pf={int(use_pf)} "
-                        f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
-                        f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
-                    ))
-
-                    if not out_summary["timed_out"]:
-                        summary_rows.append([sel_name, k_count, float(alpha), int(use_pf), out_summary["EM"], out_summary["F1"]])
+                    summary_rows.append([sel_name, k_count, float(alpha), int(use_pf), out_summary["EM"], out_summary["F1"]])
 
     # 保存最终汇总 CSV（按 F1 降序）
     final_csv = os.path.join(args.results_root, 'nq_hparam_unified_summary.csv')

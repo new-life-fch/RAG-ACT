@@ -85,6 +85,7 @@ def generate_llama_answer(question, docs_texts, pipe):
     # 我们需要的是最后一条，即 "assistant" 的 "content"
     assistant_reply_content = outputs[0]["generated_text"][-1]["content"]
     answer = assistant_reply_content.strip()
+    print(f"Generated answer: {answer}")
     
     return answer
 
@@ -186,11 +187,11 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
     print("正在加载Llama模型...")
     
     # 使用pipeline加载模型
-    model_path = "/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf"
+    model_path = "/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct"
     
     # 自动选择设备 (GPU 优先)
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-    # 使用 bfloat16 提高性能并减少显存占用
+    # 使用 float16 (环境不支持 bfloat16)
     torch_dtype = torch.float16
     
     try:
@@ -284,7 +285,7 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
 if __name__ == "__main__":
     # 新功能：生成新数据集
     input_file = 'RAG/data/NQ/nq-dev-train.jsonl'
-    output_file = 'RAG/data/NQ/llama_2_chat_7b_train_user.jsonl'
+    output_file = 'RAG/data/NQ/llama_3_8b_instruct_train_user.jsonl'
     
     # 先用10条数据进行测试
     generate_new_dataset(input_file, output_file, num_samples=1500, random_seed=2025)

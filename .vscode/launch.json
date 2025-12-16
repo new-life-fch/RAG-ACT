@@ -68,6 +68,53 @@
                 "CUDA_VISIBLE_DEVICES": "0,1",
                 "TRANSFORMERS_VERBOSITY": "info"
             }
+        },
+        {
+            "name": "Debug: nq_con_rag (CoN two-stage, Llama-2-7b)",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/RAG/nq_con_rag.py",
+            "python": "/root/.conda/envs/iti/bin/python",
+            "args": [
+                "--model_name", "llama2_chat_7B",
+                "--dataset_path", "RAG/data/NQ/test_noise_test_noise4.jsonl",
+                "--use_chat_template",
+                "--max_docs", "5",
+                "--sample_size", "10",
+                "--max_new_tokens", "256",
+                "--results_root", "RAG/results/llama-2-chat-7b-nq-user/CoN_300"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "TRANSFORMERS_VERBOSITY": "info",
+                "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:256"
+            }
+        },
+        {
+            "name": "Debug: nq_naive_llm (no retrieval)",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/RAG/nq_naive_llm.py",
+            "python": "/root/.conda/envs/iti/bin/python",
+            "args": [
+                "--model_name", "llama2_chat_7B",
+                "--dataset_path", "RAG/data/NQ/test_noise_test_noise4.jsonl",
+                "--use_chat_template",
+                "--sample_size", "10",
+                "--max_new_tokens", "256",
+                "--results_root", "RAG/results/llama-3-8b-instruct-nq-user/naive-llm"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "TRANSFORMERS_VERBOSITY": "info",
+                "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:256"
+            }
         }
     ]
 }
