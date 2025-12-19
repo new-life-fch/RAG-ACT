@@ -8,6 +8,10 @@ sys.path.append('../')
 from llama_utils import (
     get_llama_activations_bau,
     tokenized_nq_with_docs_dual,
+    tokenized_nq_noise_contrastive,
+    _load_nq_jsonl,
+    _build_messages_input,
+    prompt_dict
 )
 import llama
 import argparse
@@ -15,8 +19,10 @@ from transformers import AutoTokenizer
 
 # 模型路径映射
 HF_NAMES = {
-    'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf', 
+    'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
     'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
+    'llama2_chat_13B': '/root/shared-nvme/RAG-llm/models/Llama-2-13b-chat-hf',
+    'vicuna_7B_v1.5': '/root/shared-nvme/RAG-llm/models/vicuna-7b-v1.5',
 }
 
 def main(): 
@@ -34,8 +40,12 @@ def main():
     parser.add_argument('--nq_max_samples', type=int, default=None, help='仅处理指定数量的样本')
     parser.add_argument('--nq_max_docs', type=int, default=None, help='每条样本使用的检索片段数量上限')
     parser.add_argument('--use_chat_template', action='store_true', help='使用 tokenizer.apply_chat_template 构造聊天输入')
+    parser.add_argument('--use_noise_contrastive', action='store_true', help='使用 Clean vs Noisy 对比数据，用于提取抗噪方向')
     # 输出配置
     parser.add_argument('--output_dir', type=str, default='../RAG-llm/RAG/features', help='输出特征文件的目录')
+    # 提取位置配置
+    parser.add_argument('--extraction_point', type=str, default='answer_end', choices=['answer_end', 'prompt_end'], 
+                        help='提取激活特征的位置：answer_end (整个序列最后) 或 prompt_end (Assistant 开始回答前)')
     # 设备配置
     parser.add_argument('--device', type=int, default=0, help='GPU 设备编号')
     args = parser.parse_args()
@@ -51,14 +61,63 @@ def main():
     device = model.device  # 与模型的 device_map 保持一致
 
     # 处理 NQ 数据集，构造 prompts 和相关元数据
-    print("Tokenizing NQ prompts...")
-    prompts, labels, categories, tokens = tokenized_nq_with_docs_dual(
-        args.nq_jsonl,
-        tokenizer,
-        max_samples=args.nq_max_samples,
-        max_docs=args.nq_max_docs,
-        use_chat_template=args.use_chat_template,
-    )
+    print(f"Tokenizing NQ prompts (noise_contrastive={args.use_noise_contrastive})...")
+    
+    if args.use_noise_contrastive:
+        prompts, labels, categories, tokens = tokenized_nq_noise_contrastive(
+            args.nq_jsonl,
+            tokenizer,
+            max_samples=args.nq_max_samples,
+            max_docs=args.nq_max_docs,
+            use_chat_template=args.use_chat_template,
+        )
+    else:
+        prompts, labels, categories, tokens = tokenized_nq_with_docs_dual(
+            args.nq_jsonl,
+            tokenizer,
+            max_samples=args.nq_max_samples,
+            max_docs=args.nq_max_docs,
+            use_chat_template=args.use_chat_template,
+        )
+
+    # 如果是 prompt_end，需要知道 prompt 的结束位置
+    prompt_lengths = []
+    if args.extraction_point == 'prompt_end':
+        print("Calculating prompt lengths for 'prompt_end' extraction...")
+        entries = _load_nq_jsonl(args.nq_jsonl, max_samples=args.nq_max_samples)
+        
+        for ex in entries:
+            if not all(k in ex for k in ["query", "answers", "retrieve_snippets"]):
+                continue
+            
+            question = ex["query"]
+            snippets = ex["retrieve_snippets"]
+            
+            if args.use_noise_contrastive:
+                # 1. Clean prompt length
+                gold_snippet = snippets[0].get("text", "").strip()
+                if not gold_snippet: continue
+                clean_docs_block = f"Passage-1: {gold_snippet}"
+                system_prompt = prompt_dict['qa']['RAG_system']
+                clean_user_prompt = prompt_dict['qa']['RAG_user'].format(paras=clean_docs_block, question=question, answer='')
+                p_ids_clean = _build_messages_input(tokenizer, system_prompt, clean_user_prompt, None, args.use_chat_template)
+                prompt_lengths.append(p_ids_clean.shape[-1])
+                
+                # 2. Noisy prompt length
+                docs_texts = [snip.get("text", "").strip() for snip in snippets[:args.nq_max_docs] if snip.get("text", "").strip()]
+                noisy_docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+                noisy_user_prompt = prompt_dict['qa']['RAG_user'].format(paras=noisy_docs_block, question=question, answer='')
+                p_ids_noisy = _build_messages_input(tokenizer, system_prompt, noisy_user_prompt, None, args.use_chat_template)
+                prompt_lengths.append(p_ids_noisy.shape[-1])
+            else:
+                docs_texts = [snip.get("text", "").strip() for snip in snippets[:args.nq_max_docs] if snip.get("text", "").strip()]
+                docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+                system_prompt = prompt_dict['qa']['RAG_system']
+                user_prompt = prompt_dict['qa']['RAG_user'].format(paras=docs_block, question=question, answer='')
+                p_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, None, args.use_chat_template)
+                p_len = p_ids.shape[-1]
+                prompt_lengths.append(p_len)
+                prompt_lengths.append(p_len)
 
     # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
@@ -71,14 +130,20 @@ def main():
         pickle.dump(tokens, f)
 
     # 提取激活特征
-    print("Extracting model activations...")
+    print(f"Extracting model activations at {args.extraction_point}...")
     all_layer_wise_activations = []
     all_head_wise_activations = []
-    for prompt in tqdm(prompts, desc="Processing prompts"):
+    for i, prompt in enumerate(tqdm(prompts, desc="Processing prompts")):
         layer_activs, head_activs, _ = get_llama_activations_bau(model, prompt, device)
-        # 仅保留最后一个 token 的激活特征
-        all_layer_wise_activations.append(layer_activs[:, -1, :].copy())
-        all_head_wise_activations.append(head_activs[:, -1, :].copy())
+        
+        if args.extraction_point == 'answer_end':
+            idx = -1
+        else:
+            # prompt_end: 对应 prompt 的最后一个 token
+            idx = prompt_lengths[i] - 1
+            
+        all_layer_wise_activations.append(layer_activs[:, idx, :].copy())
+        all_head_wise_activations.append(head_activs[:, idx, :].copy())
 
     # 保存激活特征和标签
     print("Saving output features...")

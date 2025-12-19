@@ -208,14 +208,36 @@ def _build_messages_input(tokenizer, system_prompt: str, user_prompt: str, assis
 
     返回：`torch.Tensor`，形状为 `(1, seq_len)` 的 `input_ids`。
     """
+    
+
+    is_inference = (assistant_content is None)
+
+    name_or_path = str(getattr(tokenizer, "name_or_path", "") or "").lower()
+    is_vicuna = "vicuna" in name_or_path
+
+    # ========= Vicuna：手写 prompt =========
+    if is_vicuna:
+        prompt_parts = []
+
+        if system_prompt:
+            # 合并 system → USER（官方推荐）
+
+            user_content = system_prompt.strip() + '\n\n' + user_prompt.strip()
+            prompt_parts.append(f"USER: {user_content}")
+            prompt_parts.append("ASSISTANT:")
+
+        if assistant_content is not None:
+            prompt_parts[-1] += " " + assistant_content.strip()
+
+        prompt = "\n\n".join(prompt_parts)
+
+        return tokenizer(prompt, return_tensors="pt", add_special_tokens=False).input_ids
+    
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    
-    # 判断是否为 Teacher Forcing 模式（已有助手回答）
-    is_inference = (assistant_content is None)
-    
+
     if assistant_content is not None:
         messages.append({"role": "assistant", "content": assistant_content})
 
@@ -319,6 +341,76 @@ def tokenized_nq_with_docs_dual(
         labels.append(0)
         categories.append('NQ')
         tokens.append(wrong_tokens)
+
+    return prompts, labels, categories, tokens
+
+
+def tokenized_nq_noise_contrastive(
+    jsonl_path: str,
+    tokenizer,
+    max_samples: int = None,
+    max_docs: int = 5,
+    use_chat_template: bool = False,
+) -> Tuple[List[torch.Tensor], List[int], List[str], List[List[str]]]:
+    """
+    基于 NQ 数据集（jsonl），为每条样本生成两种对比输入，用于寻找“抗噪”方向：
+    1) 问题 + 仅 Gold Snippet (第一个片段) + 正确答案（label=1） -> Clean 状态
+    2) 问题 + 多个 Snippets (Gold + Distractors) + 正确答案（label=0） -> Noisy 状态
+
+    通过在 Prompt 结尾处提取激活，探针可以学习到“存在噪声”与“无噪声”的特征差异。
+    干预时，我们将激活向 Label=1 (Clean) 的方向推，以期抵消噪声的影响。
+    """
+    entries = _load_nq_jsonl(jsonl_path, max_samples=max_samples)
+
+    prompts: List[torch.Tensor] = []
+    labels: List[int] = []
+    categories: List[str] = []
+    tokens: List[List[str]] = []
+
+    for i, ex in enumerate(entries):
+        if not all(k in ex for k in ["query", "answers", "retrieve_snippets"]):
+            continue
+
+        question = ex["query"]
+        answers = ex["answers"]
+        snippets = ex["retrieve_snippets"]
+
+        if not isinstance(answers, list) or len(answers) == 0:
+            continue
+        correct_answer = answers[0]
+
+        # 1. 构造 Clean Prompt (仅取第一个 snippet，通常是 Gold)
+        gold_snippet = snippets[0].get("text", "").strip()
+        if not gold_snippet:
+            continue
+        
+        clean_docs_block = f"Passage-1: {gold_snippet}"
+        system_prompt = prompt_dict['qa']['RAG_system']
+        clean_user_prompt = prompt_dict['qa']['RAG_user'].format(paras=clean_docs_block, question=question, answer='')
+        
+        clean_ids = _build_messages_input(tokenizer, system_prompt, clean_user_prompt, correct_answer, use_chat_template)
+        prompts.append(clean_ids)
+        labels.append(1)
+        categories.append('NQ_Contrastive')
+        tokens.append(tokenizer.convert_ids_to_tokens(clean_ids[0]))
+
+        # 2. 构造 Noisy Prompt (取前 max_docs 个 snippets)
+        docs_texts = []
+        for j, snip in enumerate(snippets):
+            if max_docs is not None and j >= max_docs:
+                break
+            text = snip.get("text", "")
+            if isinstance(text, str) and len(text.strip()):
+                docs_texts.append(text.strip())
+        
+        noisy_docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
+        noisy_user_prompt = prompt_dict['qa']['RAG_user'].format(paras=noisy_docs_block, question=question, answer='')
+        
+        noisy_ids = _build_messages_input(tokenizer, system_prompt, noisy_user_prompt, correct_answer, use_chat_template)
+        prompts.append(noisy_ids)
+        labels.append(0)
+        categories.append('NQ_Contrastive')
+        tokens.append(tokenizer.convert_ids_to_tokens(noisy_ids[0]))
 
     return prompts, labels, categories, tokens
 
