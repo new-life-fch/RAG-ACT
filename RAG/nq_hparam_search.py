@@ -30,6 +30,8 @@ from utils.prompts_templates import prompt_dict
 HF_NAMES = {
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
     'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
+    'llama2_chat_13B': '/root/shared-nvme/RAG-llm/models/Llama-2-13b-chat-hf',
+    'vicuna_7B_v1.5': '/root/shared-nvme/RAG-llm/models/vicuna-7b-v1.5',
 }
 
 
@@ -124,21 +126,24 @@ def make_selection_strategies(
     strategies['layers_0_31'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(32)]
     strategies['layers_0_5'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(5)]
     strategies['layers_5_10'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(10)]
-    strategies['layers_5_15'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(15)]
+    strategies['layers_5_9'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(9)]
+    strategies['layers_7_14'] = [(l, h) for (l, h, s) in scores if 7 <= l < clamp_end(14)]
+    strategies['layers_8_15'] = [(l, h) for (l, h, s) in scores if 8 <= l < clamp_end(15)]
     strategies['layers_10_15'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(15)]
     strategies['layers_15_20'] = [(l, h) for (l, h, s) in scores if 15 <= l < clamp_end(20)]
     strategies['layers_7_15'] = [(l, h) for (l, h, s) in scores if 7 <= l < clamp_end(15)]
 
     # Top Layers from Causal Trace Experiment
     strategies['top_k_layers_llama2_chat_7B'] = [(l, h) for (l, h, s) in scores if l in [11,2,13,15,16,12,10,8,6]]
-    strategies['top_k_layers_llama3_8B_instruct'] = [(l, h) for (l, h, s) in scores if l in [10, 4, 5, 6, 8, 3, 22]]
+    # strategies['top_k_layers_llama3_8B_instruct'] = [(l, h) for (l, h, s) in scores if l in [5, 30, 20, 2, 8, 11, 26, 0, 7, 22, 24, 21, 29]]
+    strategies['top_k_layers_llama3_8B_instruct'] = [(l, h) for (l, h, s) in scores if l in [5, 30]]
     
 
     # 全部头
     strategies['all_heads'] = [(l, h) for (l, h, s) in scores]
 
     # 全局 top-k
-    for k in [6, 8, 12, 24, 32, 48, 64, 96, 128, 256, 512, 768, 896, 1024]:
+    for k in [6, 8, 12, 13, 24, 32, 48, 64, 96, 128, 256, 448, 512, 768, 896, 1024]:
         kk = min(k, len(by_score))
         strategies[f'topk_{kk}_by_score'] = [(l, h) for (l, h, s) in by_score[:kk]]
 
@@ -363,7 +368,7 @@ def main():
     parser.add_argument('--probe_factor_modes', type=str, default='both', choices=['both','true','false'],
                         help='是否乘探针分数：both/true/false')
 
-    parser.add_argument('--timeout_minutes', type=float, default=3.0,
+    parser.add_argument('--timeout_minutes', type=float, default=4.0,
                         help='单次实验的最长运行时间（分钟），超过则中断并进入下一组参数')
     parser.add_argument('--skip_if_exists', action='store_true',
                         help='若当前实验的 summary 文件已存在则跳过执行')
@@ -395,6 +400,7 @@ def main():
         args.dataset_path, tokenizer, max_samples=None, max_docs=args.max_docs,
         use_chat_template=args.use_chat_template, sample_size=args.sample_size, sample_seed=args.sample_seed,
     )
+##--------------------------------------------
 
     # 先跑一次 baseline
     baseline_ans, baseline_sum = run_baseline(model, tokenizer, device, inputs, gold_answers_list, args.max_new_tokens)
@@ -412,6 +418,7 @@ def main():
         f"F1={baseline_sum['F1']:.4f} ΔEM={0.0:+.4f} ΔF1={0.0:+.4f}"
     )
 
+##--------------------------------------------
     # 加载探针、分数与调强度激活
     with open(args.probes_path, 'rb') as f:
         probes = pickle.load(f)
@@ -505,13 +512,17 @@ def main():
                 }
                 with open(sum_path, 'w', encoding='utf-8') as f:
                     json.dump(out_summary, f, ensure_ascii=False, indent=2)
+##--------------------------------------------
 
                 d_em = out_summary["EM"] - baseline_sum["EM"]
                 d_f1 = out_summary["F1"] - baseline_sum["F1"]
+##--------------------------------------------
                 status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
                 print((
                     f"[Intervene:{status}] strategy={sel_name} heads={k_count} alpha={alpha} pf={int(use_pf)} "
+##--------------------------------------------
                     f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
+##--------------------------------------------
                     f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
                 ))
 
@@ -525,8 +536,9 @@ def main():
         f.write('selection,num_heads,alpha/use_map,use_probe_factor,EM,F1\n')
         for row in summary_rows_sorted:
             f.write(','.join(map(str, row)) + '\n')
-
+##--------------------------------------------
     print(f"Baseline summary saved to: {baseline_sum_path}")
+##--------------------------------------------
     print(f"All run summaries saved under: {sum_dir}")
     print(f"Final hyperparam summary: {final_csv}")
 

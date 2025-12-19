@@ -30,11 +30,16 @@ from utils.prompts_templates import prompt_dict
 HF_NAMES = {
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
     'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
+    'llama2_chat_13B': '/root/shared-nvme/RAG-llm/models/Llama-2-13b-chat-hf',
+    'vicuna_7B_v1.5': '/root/shared-nvme/RAG-llm/models/vicuna-7b-v1.5',
 }
 
 # 从 causal_layer_trace.csv 中读取的层排序 (Score = Delta_EM + Delta_F1 降序)
+# LAYER_ORDER = [
+#     11,2,13,15,16,12,10,8,6,31,26,20,27,23
+# ]
 LAYER_ORDER = [
-    11,2,13,15,16,12,10,8,6,31,26,20,27,23
+    5, 30, 20, 2, 8, 11, 26, 0, 7, 22, 24, 21, 29
 ]
 
 def build_nq_generation_inputs(

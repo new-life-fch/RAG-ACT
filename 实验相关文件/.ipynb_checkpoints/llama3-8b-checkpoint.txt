@@ -21,22 +21,6 @@ python RAG/causal_trace_experiment.py \
   --tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
   --alpha 5.0 --max_new_tokens 256 --output_csv RAG/results/llama-3-8b-instruct-nq-user/causal_layer_trace_pf0.csv --sample_size 50
 
-前k层超参数干预
-python RAG/nq_layer_hparam_search.py \
---model_name llama3_8B_instruct \
---dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl \
---use_chat_template \
---probes_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_probes.pkl \
---val_accs_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_val_accs.npy \
---tuning_headwise_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_head_wise.npy \
---tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
---sample_size 100 \
---probe_factor_modes false \
---results_root RAG/results/llama-3-8b-instruct-triviaqa-user/top-layers-intervention \
---summary_csv top_layer_intervention_results.csv \
---alphas 5 \
---max_new_tokens 256
-
 细粒度超参数搜索实验
 python RAG/nq_fine_grained_hparam_search.py \
   --model_name llama3_8B_instruct \
@@ -66,21 +50,7 @@ python RAG/nq_hparam_search.py \
 --tuning_headwise_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_head_wise.npy \
 --tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
 --scores_csv RAG/probes/llama3_8B_instruct_nq_user/accs_csv.csv \
---alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies layers_5_9 --results_root RAG/results/llama-3-8b-instruct-nq-user/layers_5_9_alphas_5 --sample_size 300
-
-TriviaQA实验
-python RAG/nq_hparam_search.py \
---model_name llama3_8B_instruct \
---dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl \
---use_chat_template \
---probes_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_probes.pkl \
---val_accs_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_val_accs.npy \
---tuning_headwise_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_head_wise.npy \
---tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
---scores_csv RAG/probes/llama3_8B_instruct_nq_user/accs_csv.csv \
---alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies layers_5_9 --results_root RAG/results/llama-3-8b-instruct-triviaqa-user/layers_5_9_alphas_5 --sample_size 300
-
-
+--alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies layers_0_10 --results_root RAG/results/llama-3-8b-instruct-nq-user/layers_0_10_alphas_5 --sample_size 100
 
 超参
 python RAG/nq_hparam_search_topk_alpha.py \

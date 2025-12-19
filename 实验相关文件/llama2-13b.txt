@@ -1,0 +1,48 @@
+naive llm:
+python RAG/nq_naive_llm.py \
+--model_name llama2_chat_13B \
+--dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
+--use_chat_template \
+--sample_size 300 \
+--max_new_tokens 256 \
+--results_root RAG/results/llama-2-chat-13b-nq-user/naive-llm
+
+激活采集:
+python RAG/llama_get_activations.py --model_name llama2_chat_13B --dataset_name nq --use_chat_template --nq_jsonl RAG/data/NQ/llama_2_chat_7b_train_user.jsonl --output_dir RAG/features/llama2_chat_13B_nq_user
+
+训练探针：
+python RAG/train_save_probes.py --model_name llama2_chat_13B --num_heads 40 --head_dim 128 --feat_dir RAG/features/llama2_chat_13B_nq_user --save_dir RAG/probes/llama2_chat_13B_nq_user --cv_final_train full
+
+获取探针分数：
+python RAG/utils/inspect_probes.py RAG/probes/llama2_chat_13B_nq_user/llama2_chat_13B_nq_seed_2025_top_1024_folds_3_val_accs.npy --out-csv RAG/probes/llama2_chat_13B_nq_user/accs_csv.csv
+
+热力图：
+python RAG/utils/plot_probe_heatmap.py RAG/probes/llama2_chat_13B_nq_user/accs_csv.csv --output RAG/probes/llama2_chat_13B_nq_user/accs_heatmap.png --cmap turbo --bins 12 --discrete
+
+NQ:
+```bash
+python RAG/nq_hparam_search.py \
+--model_name llama2_chat_13B \
+--num_heads 40 \
+--head_dim 128 \
+--dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
+--use_chat_template \
+--probes_path RAG/probes/llama2_chat_13B_nq_user/llama2_chat_13B_nq_seed_2025_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/probes/llama2_chat_13B_nq_user/llama2_chat_13B_nq_seed_2025_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama2_chat_13B_nq_user/llama2_chat_13B_nq_head_wise.npy \
+--tuning_labels_path RAG/features/llama2_chat_13B_nq_user/llama2_chat_13B_nq_labels.npy \
+--scores_csv RAG/probes/llama2_chat_13B_nq_user/accs_csv.csv \
+--alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_13_by_score --results_root RAG/results/llama-2-chat-13b-nq-user/topk_13_by_score_alphas_5 --sample_size 300 --timeout_minutes 7
+```
+
+
+
+
+
+
+
+
+
+
+
+

@@ -94,6 +94,7 @@
             }
         },
         {
+            
             "name": "Debug: nq_naive_llm (no retrieval)",
             "type": "debugpy",
             "request": "launch",
@@ -115,6 +116,33 @@
                 "TRANSFORMERS_VERBOSITY": "info",
                 "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:256"
             }
+        },
+        {
+            "name": "Debug: 3_extract_remaining_testset_popqa",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/RAG/utils/3_extract_remaining_testset_popqa.py",
+            "python": "/root/.conda/envs/iti/bin/python",
+            "args": [
+                "--input", "RAG/data/PopQA/PopQA_processed.jsonl",
+                "--val-output", "RAG/data/PopQA/val_noise_test.jsonl",
+                "--test-output", "RAG/data/PopQA/test_noise_test.jsonl",
+                "--train-num", "0",
+                "--val-num", "0",
+                "--test-num", "1190",
+                "--method", "random",
+                "--seed", "2025",
+                "--noise-levels", "0,1,2,3,4,5"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "TRANSFORMERS_VERBOSITY": "info",
+                "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:256"
+            },
         }
+        
     ]
 }

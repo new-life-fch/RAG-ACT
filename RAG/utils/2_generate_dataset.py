@@ -284,8 +284,8 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
 # --- 主程序 ---
 if __name__ == "__main__":
     # 新功能：生成新数据集
-    input_file = 'RAG/data/NQ/nq-dev-train.jsonl'
-    output_file = 'RAG/data/NQ/llama_3_8b_instruct_train_user.jsonl'
+    input_file = 'RAG/data/PopQA/PopQA_processed.jsonl'
+    output_file = 'RAG/data/PopQA/train_user.jsonl'
     
     # 先用10条数据进行测试
-    generate_new_dataset(input_file, output_file, num_samples=1500, random_seed=2025)
+    generate_new_dataset(input_file, output_file, num_samples=500, random_seed=2025)

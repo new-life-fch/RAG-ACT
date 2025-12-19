@@ -1,0 +1,8 @@
+naive llm:
+python RAG/nq_naive_llm.py \
+--model_name llama2_chat_13B \
+--dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
+--use_chat_template \
+--sample_size 300 \
+--max_new_tokens 256 \
+--results_root RAG/results/llama-2-chat-13b-nq-user/naive-llm

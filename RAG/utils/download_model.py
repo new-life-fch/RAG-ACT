@@ -23,10 +23,10 @@ except Exception as e:
 
 
 # 模型名称
-repo_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+repo_id = "lmsys/vicuna-7b-v1.5"
 
 # 本地保存路径
-local_dir = "/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct"    
+local_dir = "/root/shared-nvme/RAG-llm/models/vicuna-7b-v1.5"    
 os.makedirs(local_dir, exist_ok=True)
 
 print(f"⬇️ 正在从官方 Hugging Face 下载模型 '{repo_id}' 到 '{local_dir}'...")
@@ -35,7 +35,11 @@ try:
     snapshot_download(
         repo_id=repo_id,
         local_dir=local_dir,
-        force_download=False,  # 如果需要强制重下改为 True
+        local_dir_use_symlinks=False,  # 避免符号链接问题（服务器环境推荐）
+        force_download=False,  # 已下载的文件不重复下载（需重下则改为True）
+        resume_download=True,  # 支持断点续传（网络中断后可继续）
+        # ignore_patterns=["*.bin", "*.pth"],  # 过滤掉 .bin 和 .pth 文件
+        max_workers=8,  # 多线程下载（加速）
     )
     print("✅ 模型下载成功！")
 except Exception as e:

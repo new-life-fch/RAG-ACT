@@ -30,6 +30,8 @@ from utils.prompts_templates import prompt_dict
 HF_NAMES = {
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
     'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
+    'llama2_chat_13B': '/root/shared-nvme/RAG-llm/models/Llama-2-13b-chat-hf',
+    'vicuna_7B_v1.5': '/root/shared-nvme/RAG-llm/models/vicuna-7b-v1.5',
 }
 
 
@@ -262,7 +264,7 @@ def main():
     parser.add_argument('--max_new_tokens', type=int, default=256)
     parser.add_argument('--results_root', type=str, default='./RAG/results_dump/llama-2-7b-instruct-topk-alpha')
     parser.add_argument('--pf_gamma', type=float, default=1.0)
-    parser.add_argument('--timeout_minutes', type=float, default=2.0)
+    parser.add_argument('--timeout_minutes', type=float, default=1.5)
     parser.add_argument('--skip_if_exists', action='store_true')
     
     args = parser.parse_args()
@@ -271,13 +273,14 @@ def main():
     # 1. 定义超参数网格 (Reasonable Grids)
     # ---------------------------------------------------------
     # Top-K: 从小到大，覆盖主要区间
-    # top_k_grid = [8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 448, 512, 640, 768, 896, 1024]
-    top_k_grid = [8]
+    top_k_grid = [8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 448, 512, 640, 768, 896, 1024]
+    # top_k_grid = [448, 512, 640, 768, 896, 1024]
+    # top_k_grid = [12]
     
     # Alpha: 覆盖弱到强 (0.1 ~ 30)
-    # alpha_grid = [5,6,7,8,9,10,11,12,13,14,15]
+    alpha_grid = [5,7,9,11,13]
     # alpha_grid = [39,40,41,55,60,65,70]
-    alpha_grid = [1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35]
+    # alpha_grid = [1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35]
     
     # Probe Factor Mode: 为了控制变量，这里固定为 False (不乘探针准确率) 或者 True
     # 如果要对比，可以设为 [False] 或 [True]。这里默认设为 False (纯强度控制)
@@ -403,10 +406,10 @@ def main():
 
                 d_em = out_summary["EM"] - baseline_sum["EM"]
                 d_f1 = out_summary["F1"] - baseline_sum["F1"]
-                print(f"[Run] {sel_name} alpha={alpha} pf={int(use_pf)} -> EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f}")
+                print(f"[Run] {sel_name} alpha={alpha} pf={int(use_pf)} -> EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} d_EM={d_em:.4f} d_F1={d_f1:.4f}")
                 
                 if not out_summary["timed_out"]:
-                    summary_rows.append([sel_name, kk, float(alpha), int(use_pf), out_summary["EM"], out_summary["F1"]])
+                    summary_rows.append([sel_name, kk, float(alpha), int(use_pf), out_summary["EM"], out_summary["F1"], d_em, d_f1])
 
     # ---------------------------------------------------------
     # 8. 保存汇总
@@ -414,7 +417,7 @@ def main():
     final_csv = os.path.join(args.results_root, 'final_summary.csv')
     summary_rows_sorted = sorted(summary_rows, key=lambda r: r[5], reverse=True)
     with open(final_csv, 'w', encoding='utf-8') as f:
-        f.write('selection,num_heads,alpha,use_probe_factor,EM,F1\n')
+        f.write('selection,num_heads,alpha,use_probe_factor,EM,F1,d_EM,d_F1\n')
         for row in summary_rows_sorted:
             f.write(','.join(map(str, row)) + '\n')
             

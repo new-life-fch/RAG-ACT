@@ -20,6 +20,8 @@ from utils.prompts_templates import prompt_dict
 HF_NAMES = {
     'llama2_chat_7B': '/root/shared-nvme/RAG-llm/models/Llama-2-7b-chat-hf',
     'llama3_8B_instruct': '/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct',
+    'llama2_chat_13B': '/root/shared-nvme/RAG-llm/models/Llama-2-13b-chat-hf',
+    'vicuna_7B_v1.5': '/root/shared-nvme/RAG-llm/models/vicuna-7b-v1.5',
 }
 
 
@@ -48,8 +50,8 @@ def build_nq_naive_inputs(
         question = ex["query"]
         answers = ex["answers"]
 
-        system_prompt = prompt_dict['qa']['RAG_system']
-        user_prompt = prompt_dict['qa']['naive_LLM'].format(question=question)
+        system_prompt = prompt_dict['vicuna']['naive_LLM_system']
+        user_prompt = prompt_dict['vicuna']['naive_LLM_user'].format(question=question)
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
         inputs.append(input_ids)
@@ -73,11 +75,19 @@ def clean_answer_text(gen_str: str) -> str:
 
 def run_generate(model, tokenizer, device, inputs: List[torch.Tensor], max_new_tokens: int) -> List[str]:
     outputs: List[str] = []
+    is_first_iter = True
     with torch.no_grad():
         for input_ids in tqdm(inputs, desc='naive_llm_generate'):
             if input_ids is None or input_ids.shape[-1] > 4096:
                 raise ValueError(f"输入上下文 token 数超限: {0 if input_ids is None else input_ids.shape[-1]}，最大允许 4096")
             input_ids = input_ids.to(device)
+            
+            if is_first_iter:
+                print("==== PROMPT ====")
+                print(tokenizer.decode(input_ids[0]))
+                # 标志置为 False，后续不再打印
+                is_first_iter = False
+            
             gen_tokens = model.generate(
                 input_ids,
                 do_sample=False,
