@@ -61,19 +61,7 @@
 
   NQ:
 ```bash
-python RAG/nq_hparam_search.py \
---model_name vicuna_7B_v1.5 \
---dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
---probes_path RAG/probes/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_seed_2025_top_1024_folds_3_probes.pkl \
---val_accs_path RAG/probes/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_seed_2025_top_1024_folds_3_val_accs.npy \
---tuning_headwise_path RAG/features/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_head_wise.npy \
---tuning_labels_path RAG/features/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_labels.npy \
---scores_csv RAG/probes/vicuna_7B_v1.5_nq_user/accs_csv.csv \
---alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_128_by_score --results_root RAG/results/vicuna-7b-v1.5-nq-user/topk_128_by_score_alphas_5 --sample_size 300 --timeout_minutes 6
-```
-
-```bash
-python RAG/nq_hparam_search.py \
+python RAG/generate.py \
 --model_name vicuna_7B_v1.5 \
 --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
 --probes_path RAG/probes/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_seed_2025_top_1024_folds_3_probes.pkl \
@@ -81,24 +69,13 @@ python RAG/nq_hparam_search.py \
 --tuning_headwise_path RAG/features/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_head_wise.npy \
 --tuning_labels_path RAG/features/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_labels.npy \
 --scores_csv RAG/probes/vicuna_7B_v1.5_popqa_user_noise/accs_csv.csv \
---alphas 7 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_87_by_score --results_root RAG/results/vicuna-7b-v1.5-nq-user/topk_87_by_score_alphas_7 --sample_size 300 --timeout_minutes 6
+--alphas 7 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_120_by_score --results_root RAG/results/vicuna/vicuna-7b-v1.5-nq-user-noise/topk_120_by_score_alphas_7 --sample_size 300 --timeout_minutes 10
 ```
+
 
   Trivia QA:
 ```bash
-python RAG/nq_hparam_search.py \
---model_name vicuna_7B_v1.5 \
---dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl \
---probes_path RAG/probes/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_seed_2025_top_1024_folds_3_probes.pkl \
---val_accs_path RAG/probes/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_seed_2025_top_1024_folds_3_val_accs.npy \
---tuning_headwise_path RAG/features/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_head_wise.npy \
---tuning_labels_path RAG/features/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_labels.npy \
---scores_csv RAG/probes/vicuna_7B_v1.5_nq_user/accs_csv.csv \
---alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies layers_8_14 --results_root RAG/results/vicuna-7b-v1.5-triviaqa-user/layers_8_14_alphas_5 --sample_size 300 --timeout_minutes 6
-```
-
-```bash
-python RAG/nq_hparam_search.py \
+python RAG/generate.py \
 --model_name vicuna_7B_v1.5 \
 --dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl \
 --probes_path RAG/probes/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_seed_2025_top_1024_folds_3_probes.pkl \
@@ -106,24 +83,13 @@ python RAG/nq_hparam_search.py \
 --tuning_headwise_path RAG/features/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_head_wise.npy \
 --tuning_labels_path RAG/features/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_labels.npy \
 --scores_csv RAG/probes/vicuna_7B_v1.5_popqa_user_noise/accs_csv.csv \
---alphas 7 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_87_by_score --results_root RAG/results/vicuna-7b-v1.5-triviaqa-user/topk_87_by_score_alphas_7 --sample_size 300 --timeout_minutes 6
+--alphas 7 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_120_by_score --results_root RAG/results/vicuna/vicuna-7b-v1.5-triviaqa-user-noise/topk_120_by_score_alphas_7 --sample_size 300 --timeout_minutes 10
 ```
+
 
 PopQA:
 ```bash
-python RAG/nq_hparam_search.py \
---model_name vicuna_7B_v1.5 \
---dataset_path RAG/data/PopQA/test_noise_test_noise4.jsonl \
---probes_path RAG/probes/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_seed_2025_top_1024_folds_3_probes.pkl \
---val_accs_path RAG/probes/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_seed_2025_top_1024_folds_3_val_accs.npy \
---tuning_headwise_path RAG/features/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_head_wise.npy \
---tuning_labels_path RAG/features/vicuna_7B_v1.5_nq_user/vicuna_7B_v1.5_nq_labels.npy \
---scores_csv RAG/probes/vicuna_7B_v1.5_nq_user/accs_csv.csv \
---alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies layers_8_14 --results_root RAG/results/vicuna-7b-v1.5-popqa-user/layers_8_14_alphas_5 --sample_size 300
-```
-
-```bash
-python RAG/nq_hparam_search.py \
+python RAG/generate.py \
 --model_name vicuna_7B_v1.5 \
 --dataset_path RAG/data/PopQA/test_noise_test_noise4.jsonl \
 --probes_path RAG/probes/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_seed_2025_top_1024_folds_3_probes.pkl \
@@ -131,8 +97,9 @@ python RAG/nq_hparam_search.py \
 --tuning_headwise_path RAG/features/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_head_wise.npy \
 --tuning_labels_path RAG/features/vicuna_7B_v1.5_popqa_user_noise/vicuna_7B_v1.5_popqa_labels.npy \
 --scores_csv RAG/probes/vicuna_7B_v1.5_popqa_user_noise/accs_csv.csv \
---alphas 7 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_87_by_score --results_root RAG/results/vicuna-7b-v1.5-popqa-user/topk_87_by_score_alphas_7 --sample_size 300 --timeout_minutes 6
+--alphas 7 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_120_by_score --results_root RAG/results/vicuna/vicuna-7b-v1.5-popqa-user-noise/topk_120_by_score_alphas_7 --sample_size 300 --timeout_minutes 10
 ```
+
 
 - 产物：`results_dump/vicuna-7b-v1.5-popqa-user/` 下的逐次 summary 与最终汇总 CSV。
 
@@ -209,19 +176,19 @@ python RAG/nq_fine_grained_hparam_search.py \
 ## CoN
 - 示例命令：
 ```bash
-python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/vicuna_7B_v1.5-nq-user/CON_300
+python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/vicuna-7b-v1.5-nq-user-noise/CON_300
 ```
 ```bash
-python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/vicuna_7B_v1.5-triviaqa-user/CON_300
+python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/vicuna-7b-v1.5-triviaqa-user-noise/CON_300
 ```
 ```bash
-python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/PopQA/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/vicuna_7B_v1.5-popqa-user/CON_300
+python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/PopQA/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/vicuna/vicuna-7b-v1.5-popqa-user-noise/CON_300
 ```
 
 ## naive LLM
 - 示例命令：
 ```bash
-python RAG/nq_naive_llm.py \
+python RAG/naive_llm.py \
 --model_name vicuna_7B_v1.5 \
 --dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
 --sample_size 300 \

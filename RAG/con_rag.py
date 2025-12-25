@@ -62,8 +62,8 @@ def build_nq_con_notes_inputs(
                 docs_texts.append(text.strip())
 
         docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
-        system_prompt = prompt_dict['qa']['CoN_notes_system']
-        user_prompt = prompt_dict['qa']['CoN_notes_user'].format(passages=docs_block, question=question)
+        system_prompt = prompt_dict['qa']['CoN_notes_system'].format(passages=docs_block)
+        user_prompt = prompt_dict['qa']['CoN_notes_user'].format(question=question)
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
         inputs.append(input_ids)

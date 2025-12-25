@@ -112,7 +112,7 @@ def make_selection_strategies(
     strategies: Dict[str, List[Tuple[int, int]]] = {}
 
     # 全局 top-k，llama2_chat_7B干预35个头，vicuna-1.5-7b干预120个头
-    for k in [35,120]:
+    for k in [35,120,112,60]:
         kk = min(k, len(by_score))
         strategies[f'topk_{kk}_by_score'] = [(l, h) for (l, h, s) in by_score[:kk]]
 
@@ -170,6 +170,8 @@ def run_intervention(
     timeout_minutes: Optional[float] = None,
     alpha_per_layer: Optional[Dict[int, float]] = None,
     com_directions: Optional[np.ndarray] = None,
+    use_center_of_mass: bool = True,
+    use_random_dir: bool = False,
 ) -> Tuple[List[str], Dict[str, float]]:
     B, L, HD = tuning_headwise.shape
     if num_heads is None:
@@ -187,8 +189,8 @@ def run_intervention(
         probes,
         tuning_sep,
         num_heads_calc,
-        use_center_of_mass=True,
-        use_random_dir=False,
+        use_center_of_mass=use_center_of_mass,
+        use_random_dir=use_random_dir,
         com_directions=com_directions,
         probe_score_map=probe_score_map,
     )
@@ -353,21 +355,21 @@ def main():
     )
 ##---------------------暂时不跑baseline-----------------------
 
-    # # 先跑一次 baseline
-    # baseline_ans, baseline_sum = run_baseline(model, tokenizer, device, inputs, gold_answers_list, args.max_new_tokens)
-    # baseline_sum.update({"alpha": 0.0, "model_name": args.model_name, "intervention": "none", "sample_size": args.sample_size})
-    # baseline_ans_path = os.path.join(ans_dir, 'nq_hparam_unified_baseline_answers.jsonl')
-    # baseline_sum_path = os.path.join(sum_dir, 'nq_hparam_unified_baseline_summary.json')
-    # with open(baseline_ans_path, 'w', encoding='utf-8') as f:
-    #     for pred, golds in zip(baseline_ans, gold_answers_list):
-    #         f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
-    # with open(baseline_sum_path, 'w', encoding='utf-8') as f:
-    #     json.dump(baseline_sum, f, ensure_ascii=False, indent=2)
+    # 先跑一次 baseline
+    baseline_ans, baseline_sum = run_baseline(model, tokenizer, device, inputs, gold_answers_list, args.max_new_tokens)
+    baseline_sum.update({"alpha": 0.0, "model_name": args.model_name, "intervention": "none", "sample_size": args.sample_size})
+    baseline_ans_path = os.path.join(ans_dir, 'nq_hparam_unified_baseline_answers.jsonl')
+    baseline_sum_path = os.path.join(sum_dir, 'nq_hparam_unified_baseline_summary.json')
+    with open(baseline_ans_path, 'w', encoding='utf-8') as f:
+        for pred, golds in zip(baseline_ans, gold_answers_list):
+            f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
+    with open(baseline_sum_path, 'w', encoding='utf-8') as f:
+        json.dump(baseline_sum, f, ensure_ascii=False, indent=2)
 
-    # print(
-    #     f"[Baseline] samples={args.sample_size} EM={baseline_sum['EM']:.4f} "
-    #     f"F1={baseline_sum['F1']:.4f} ΔEM={0.0:+.4f} ΔF1={0.0:+.4f}"
-    # )
+    print(
+        f"[Baseline] samples={args.sample_size} EM={baseline_sum['EM']:.4f} "
+        f"F1={baseline_sum['F1']:.4f} ΔEM={0.0:+.4f} ΔF1={0.0:+.4f}"
+    )
 
 ##---------------------暂时不跑baseline-----------------------
     # 加载探针、分数与调强度激活
@@ -465,16 +467,16 @@ def main():
                     json.dump(out_summary, f, ensure_ascii=False, indent=2)
 ##---------------------暂时不跑baseline-----------------------
 
-                # d_em = out_summary["EM"] - baseline_sum["EM"]
-                # d_f1 = out_summary["F1"] - baseline_sum["F1"]
+                d_em = out_summary["EM"] - baseline_sum["EM"]
+                d_f1 = out_summary["F1"] - baseline_sum["F1"]
 ##---------------------暂时不跑baseline-----------------------
                 status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
                 print((
                     f"[Intervene:{status}] strategy={sel_name} heads={k_count} alpha={alpha} pf={int(use_pf)} "
 ##---------------------暂时不跑baseline-----------------------
-                    # f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
+                    f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
 ##---------------------暂时不跑baseline-----------------------
-                    f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} "
+                    # f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} "
                     f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
                 ))
 
@@ -489,7 +491,7 @@ def main():
         for row in summary_rows_sorted:
             f.write(','.join(map(str, row)) + '\n')
 ##---------------------暂时不跑baseline-----------------------
-    # print(f"Baseline summary saved to: {baseline_sum_path}")
+    print(f"Baseline summary saved to: {baseline_sum_path}")
 ##---------------------暂时不跑baseline-----------------------
     print(f"All run summaries saved under: {sum_dir}")
     print(f"Final hyperparam summary: {final_csv}")

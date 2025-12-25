@@ -56,29 +56,50 @@ python RAG/nq_fine_grained_hparam_search.py \
   --max_new_tokens 256
 
 
-NQ实验
-python RAG/nq_hparam_search.py \
---model_name llama3_8B_instruct \
---dataset_path RAG/data/PopQA/test_noise_test_noise4.jsonl \
---use_chat_template \
---probes_path RAG/probes/llama3_8B_instruct_popqa_user_noise_answer_end/llama3_8B_instruct_popqa_seed_2025_top_1024_folds_3_probes.pkl \
---val_accs_path RAG/probes/llama3_8B_instruct_popqa_user_noise_answer_end/llama3_8B_instruct_popqa_seed_2025_top_1024_folds_3_val_accs.npy \
---tuning_headwise_path RAG/features/llama3_8B_instruct_popqa_user_noise_answer_end/llama3_8B_instruct_popqa_head_wise.npy \
---tuning_labels_path RAG/features/llama3_8B_instruct_popqa_user_noise_answer_end/llama3_8B_instruct_popqa_labels.npy \
---scores_csv RAG/probes/llama3_8B_instruct_popqa_user_noise_answer_end/accs_csv.csv \
---alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_128_by_score --results_root RAG/results/llama-3-8b-instruct-popqa-user/topk_128_by_score_alphas_5 --sample_size 300
+NQ:
 
-TriviaQA实验
-python RAG/nq_hparam_search.py \
+```bash
+python RAG/generate.py \
+--model_name llama3_8B_instruct \
+--dataset_path RAG/data/NQ/test_noise_test_noise4.jsonl \
+--use_chat_template \
+--probes_path RAG/probes/llama3_8B_instruct_popqa_user_noise/llama3_8B_instruct_popqa_seed_2025_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/probes/llama3_8B_instruct_popqa_user_noise/llama3_8B_instruct_popqa_seed_2025_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama3_8B_instruct_popqa_user_noise/llama3_8B_instruct_popqa_head_wise.npy \
+--tuning_labels_path RAG/features/llama3_8B_instruct_popqa_user_noise/llama3_8B_instruct_popqa_labels.npy \
+--scores_csv RAG/probes/llama3_8B_instruct_popqa_user_noise/accs_csv.csv \
+--alphas 7 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_112_by_score --results_root RAG/results/llama3/llama-3-8b-instruct-nq-user_noise/topk_112_by_score_alphas_7 --sample_size 300 --timeout_minutes 10
+```
+
+Trivia QA:
+
+```bash
+python RAG/generate.py \
 --model_name llama3_8B_instruct \
 --dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl \
 --use_chat_template \
---probes_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_probes.pkl \
---val_accs_path RAG/probes/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_seed_2025_top_1024_folds_3_val_accs.npy \
---tuning_headwise_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_head_wise.npy \
---tuning_labels_path RAG/features/llama3_8B_instruct_nq_user/llama3_8B_instruct_nq_labels.npy \
---scores_csv RAG/probes/llama3_8B_instruct_nq_user/accs_csv.csv \
---alphas 5 --probe_factor_modes false --max_new_tokens 256 --include_strategies layers_5_9 --results_root RAG/results/llama-3-8b-instruct-triviaqa-user/layers_5_9_alphas_5 --sample_size 300
+--probes_path RAG/probes/llama3_8B_instruct_popqa_user_noise/llama3_8B_instruct_popqa_seed_2025_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/probes/llama3_8B_instruct_popqa_user_noise/llama3_8B_instruct_popqa_seed_2025_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama3_8B_instruct_popqa_user_noise/llama3_8B_instruct_popqa_head_wise.npy \
+--tuning_labels_path RAG/features/llama3_8B_instruct_popqa_user_noise/llama3_8B_instruct_popqa_labels.npy \
+--scores_csv RAG/probes/llama3_8B_instruct_popqa_user_noise/accs_csv.csv \
+--alphas 3 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_60_by_score --results_root RAG/results/llama3/llama-3-8b-instruct-triviaqa-user_noise/topk_60_by_score_alphas_3 --sample_size 300 --timeout_minutes 10
+```
+
+PopQA:
+
+```bash
+python RAG/generate.py \
+--model_name llama2_chat_7B \
+--dataset_path RAG/data/PopQA/test_noise_test_noise4.jsonl \
+--use_chat_template \
+--probes_path RAG/probes/llama2_chat_7B_popqa_user_noise/llama2_chat_7B_popqa_seed_2025_top_1024_folds_3_probes.pkl \
+--val_accs_path RAG/probes/llama2_chat_7B_popqa_user_noise/llama2_chat_7B_popqa_seed_2025_top_1024_folds_3_val_accs.npy \
+--tuning_headwise_path RAG/features/llama2_chat_7B_popqa_user_noise/llama2_chat_7B_popqa_head_wise.npy \
+--tuning_labels_path RAG/features/llama2_chat_7B_popqa_user_noise/llama2_chat_7B_popqa_labels.npy \
+--scores_csv RAG/probes/llama2_chat_7B_popqa_user_noise/accs_csv.csv \
+--alphas 7 --probe_factor_modes false --max_new_tokens 256 --include_strategies topk_35_by_score --results_root RAG/results/llama-2-chat-7b-popqa-user_noise/topk_35_by_score_alphas_7 --sample_size 300 --timeout_minutes 10
+```
 
 
 

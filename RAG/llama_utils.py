@@ -1161,13 +1161,17 @@ def get_interventions_dict(top_heads, probes, tuning_activations, num_heads, use
 
     interventions = {}
     for layer, head in top_heads:
-        interventions[f"model.layers.{layer}.self_attn.head_out"] = []
+        layer_name = f"model.layers.{layer}.self_attn.head_out"
+        if layer_name not in interventions:
+            interventions[layer_name] = []
 
     for layer, head in top_heads:
         if use_center_of_mass:
             direction = com_directions[layer_head_to_flattened_idx(layer, head, num_heads)]
         elif use_random_dir:
-            direction = np.random.normal(size=(128,))
+            # 设置随机种子为 2025，并结合 head 索引以确保每个头方向不同且可复现
+            seed = 2025 + layer_head_to_flattened_idx(layer, head, num_heads)
+            direction = np.random.RandomState(seed).normal(size=(128,))
         else:
             direction = probes[layer_head_to_flattened_idx(layer, head, num_heads)].coef_
         direction = direction.astype(np.float32, copy=False)
@@ -1230,7 +1234,7 @@ def get_com_directions(num_layers, num_heads, train_set_idxs, val_set_idxs, sepa
 
     for layer in tqdm(range(num_layers), desc="get_com_directions"): 
         for head in range(num_heads): 
-            usable_idxs = np.concatenate([train_set_idxs, val_set_idxs], axis=0)
+            usable_idxs = np.concatenate([train_set_idxs, val_set_idxs], axis=0).astype(int)
             usable_head_wise_activations = np.concatenate([separated_head_wise_activations[i][:,layer,head,:] for i in usable_idxs], axis=0)
             usable_labels = np.concatenate([separated_labels[i] for i in usable_idxs], axis=0)
             true_mass_mean = np.mean(usable_head_wise_activations[usable_labels == 1], axis=0)

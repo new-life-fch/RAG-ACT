@@ -50,8 +50,8 @@ def build_nq_naive_inputs(
         question = ex["query"]
         answers = ex["answers"]
 
-        system_prompt = prompt_dict['qa']['naive_LLM_system']
-        user_prompt = prompt_dict['qa']['naive_LLM_user'].format(question=question)
+        system_prompt = prompt_dict['vicuna']['naive_LLM_system']
+        user_prompt = prompt_dict['vicuna']['naive_LLM_user'].format(question=question)
 
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=use_chat_template)
         inputs.append(input_ids)
