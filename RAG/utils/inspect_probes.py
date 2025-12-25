@@ -62,7 +62,7 @@ def main():
     parser.add_argument('--top-heads', dest='top_heads_path', default=None,
                         help="Optional path to top heads indices (pickle). Supports ints or (layer, head) pairs.")
     parser.add_argument('--out-csv', dest='out_csv', default=None,
-                        help="Optional output CSV path. If omitted, a default under results_dump/probes/ is used.")
+                        help="Optional output CSV path. If omitted, a default under results/probes/ is used.")
 
     args = parser.parse_args()
 
@@ -125,7 +125,7 @@ def main():
     # Decide CSV path
     out_csv = args.out_csv
     if out_csv is None:
-        base_dir = os.path.join('results_dump', 'probes')
+        base_dir = os.path.join('results', 'probes')
         os.makedirs(base_dir, exist_ok=True)
         if args.top_heads_path:
             out_csv = os.path.join(base_dir, 'top_heads_val_accs.csv')

@@ -162,12 +162,12 @@ def tokenized_tqa_gen(dataset, tokenizer):
 
 
 # =====================
-# NQ (RAG) 数据集支持
+# (RAG) 数据集支持
 # =====================
 
-def _load_nq_jsonl(path: str, max_samples: int = None) -> List[Any]:
+def _load_data_jsonl(path: str, max_samples: int = None) -> List[Any]:
     """
-    读取 NQ 格式的 jsonl 文件。
+    读取 jsonl 文件。
 
     输入文件每行是一个 JSON 对象，包含字段：
     - `query`: 问题文本
@@ -264,7 +264,7 @@ def _build_messages_input(tokenizer, system_prompt: str, user_prompt: str, assis
 
 
 
-def tokenized_nq_with_docs_dual(
+def tokenized_dataset_with_docs_dual(
     jsonl_path: str,
     tokenizer,
     max_samples: int = None,
@@ -272,14 +272,14 @@ def tokenized_nq_with_docs_dual(
     use_chat_template: bool = False,
 ) -> Tuple[List[torch.Tensor], List[int], List[str], List[List[str]]]:
     """
-    基于 NQ 数据集（jsonl），为每条样本生成两种输入：
+    基于数据集（jsonl），为每条样本生成两种输入：
     1) 问题 + 检索片段 + 正确答案（label=1）
     2) 问题 + 检索片段 + 错误答案（label=0）
 
     返回四元组：`(prompts, labels, categories, tokens)`，与既有 TruthfulQA 生成流程的接口保持一致：
     - `prompts`: 列表，元素为 `torch.Tensor` 的 `input_ids`
     - `labels`: 列表，元素为 0/1 标签
-    - `categories`: 列表，此处统一标记为 'NQ'（便于下游保存）
+    - `categories`: 列表，此处统一标记为 'RAG'（便于下游保存）
     - `tokens`: 列表，元素为 token 字符串列表（仅用于辅助分析/调试）
 
     设计注意：
@@ -287,7 +287,7 @@ def tokenized_nq_with_docs_dual(
     - 用户提示词形如 `Question: ...\nAnswer:`，助手消息填写候选答案，实现 teacher forcing；
     - 片段文本以 `Document i:` 形式拼接在系统提示词中，强化模型对检索证据的注意。
     """
-    entries = _load_nq_jsonl(jsonl_path, max_samples=max_samples)
+    entries = _load_data_jsonl(jsonl_path, max_samples=max_samples)
 
     prompts: List[torch.Tensor] = []
     labels: List[int] = []
@@ -297,7 +297,7 @@ def tokenized_nq_with_docs_dual(
     for i, ex in enumerate(entries):
         # 字段完整性检查（早发现早修复）
         if not all(k in ex for k in ["query", "answers", "wrong_answer", "retrieve_snippets"]):
-            raise ValueError(f"new_dataset.jsonl 第 {i} 条记录缺少必要字段，需包含 query/answers/wrong_answer/retrieve_snippets")
+            raise ValueError(f"jsonl 第 {i} 条记录缺少必要字段，需包含 query/answers/wrong_answer/retrieve_snippets")
 
         question = ex["query"]
         answers = ex["answers"]
@@ -329,7 +329,7 @@ def tokenized_nq_with_docs_dual(
         correct_tokens = tokenizer.convert_ids_to_tokens(correct_ids[0])
         prompts.append(correct_ids)
         labels.append(1)
-        categories.append('NQ')
+        categories.append('RAG')
         tokens.append(correct_tokens)
 
         # 错误答案（label=0）
@@ -339,13 +339,13 @@ def tokenized_nq_with_docs_dual(
         wrong_tokens = tokenizer.convert_ids_to_tokens(wrong_ids[0])
         prompts.append(wrong_ids)
         labels.append(0)
-        categories.append('NQ')
+        categories.append('RAG')
         tokens.append(wrong_tokens)
 
     return prompts, labels, categories, tokens
 
 
-def tokenized_nq_noise_contrastive(
+def tokenized_dataset_noise_contrastive(
     jsonl_path: str,
     tokenizer,
     max_samples: int = None,
@@ -353,14 +353,14 @@ def tokenized_nq_noise_contrastive(
     use_chat_template: bool = False,
 ) -> Tuple[List[torch.Tensor], List[int], List[str], List[List[str]]]:
     """
-    基于 NQ 数据集（jsonl），为每条样本生成两种对比输入，用于寻找“抗噪”方向：
+    基于数据集（jsonl），为每条样本生成两种对比输入，用于寻找“抗噪”方向：
     1) 问题 + 仅 Gold Snippet (第一个片段) + 正确答案（label=1） -> Clean 状态
     2) 问题 + 多个 Snippets (Gold + Distractors) + 正确答案（label=0） -> Noisy 状态
 
     通过在 Prompt 结尾处提取激活，探针可以学习到“存在噪声”与“无噪声”的特征差异。
     干预时，我们将激活向 Label=1 (Clean) 的方向推，以期抵消噪声的影响。
     """
-    entries = _load_nq_jsonl(jsonl_path, max_samples=max_samples)
+    entries = _load_data_jsonl(jsonl_path, max_samples=max_samples)
 
     prompts: List[torch.Tensor] = []
     labels: List[int] = []
@@ -391,7 +391,7 @@ def tokenized_nq_noise_contrastive(
         clean_ids = _build_messages_input(tokenizer, system_prompt, clean_user_prompt, correct_answer, use_chat_template)
         prompts.append(clean_ids)
         labels.append(1)
-        categories.append('NQ_Contrastive')
+        categories.append('RAG_Contrastive')
         tokens.append(tokenizer.convert_ids_to_tokens(clean_ids[0]))
 
         # 2. 构造 Noisy Prompt (取前 max_docs 个 snippets)
@@ -409,17 +409,17 @@ def tokenized_nq_noise_contrastive(
         noisy_ids = _build_messages_input(tokenizer, system_prompt, noisy_user_prompt, correct_answer, use_chat_template)
         prompts.append(noisy_ids)
         labels.append(0)
-        categories.append('NQ_Contrastive')
+        categories.append('RAG_Contrastive')
         tokens.append(tokenizer.convert_ids_to_tokens(noisy_ids[0]))
 
     return prompts, labels, categories, tokens
 
 
-def get_separated_activations_nq(labels: np.ndarray, head_wise_activations: np.ndarray, num_questions: int):
+def get_separated_activations_dataset(labels: np.ndarray, head_wise_activations: np.ndarray, num_questions: int):
     """
     按问题维度对激活与标签进行分组拆分（用于探针训练）。
 
-    由于 `tokenized_nq_with_docs_dual` 对每个问题构造了两条样本（正确/错误），因此每个问题的样本数固定为 2。
+    由于 `tokenized_dataset_with_docs_dual` 对每个问题构造了两条样本（正确/错误），因此每个问题的样本数固定为 2。
 
     参数：
     - `labels`: 形状为 `(num_samples,)` 的标签数组（按样本顺序排列，如 [1,0,1,0,...]）
@@ -448,7 +448,7 @@ def get_separated_activations_nq(labels: np.ndarray, head_wise_activations: np.n
     return separated_head_wise_activations, separated_labels, idxs_to_split_at
 
 # =====================
-# NQ (RAG) 数据集支持
+# (RAG) 数据集支持
 # =====================
 
 
@@ -493,13 +493,13 @@ def load_probes(path):
 
 
 # ===============
-# NQ EM/F1 评估
+# RAG EM/F1 评估
 # ===============
 
 def normalize_answer(s: str) -> str:
     """
     规范化答案字符串：小写、去标点、去冠词、去多余空白。
-    这是 SQuAD/NQ 常见的标准化步骤，便于更稳健地比较答案匹配。
+    这是 SQuAD/RAG 常见的标准化步骤，便于更稳健地比较答案匹配。
     """
     import re
     import string
@@ -524,7 +524,7 @@ def compute_em_f1(pred: str, gold_list: List[str]) -> Tuple[float, float]:
     """
     计算单条样本的 EM 和 F1。
     - EM（Exact Match）：预测与任一金标准字符串完全匹配（在规范化后）得 1，否则 0；
-    - F1：多个金标准时取最大 token F1（常用于 SQuAD/NQ）。
+    - F1：多个金标准时取最大 token F1（常用于 SQuAD/RAG）。
     """
     pred_norm = normalize_answer(pred)
     gold_norms = [normalize_answer(g) for g in gold_list]
@@ -558,8 +558,8 @@ def compute_em_f1(pred: str, gold_list: List[str]) -> Tuple[float, float]:
     return em, f1_max
 
 
-def evaluate_nq_em_f1(predictions: List[str], gold_answers_list: List[List[str]]) -> Tuple[float, float]:
-    """批量计算 EM、F1（NQ 默认逻辑）。"""
+def evaluate_rag_em_f1(predictions: List[str], gold_answers_list: List[List[str]]) -> Tuple[float, float]:
+    """批量计算 EM、F1（RAG 默认逻辑）。"""
     assert len(predictions) == len(gold_answers_list), '预测与金标准样本数不一致'
     ems, f1s = [], []
     for pred, golds in zip(predictions, gold_answers_list):
@@ -621,7 +621,7 @@ def compute_f1_only(pred: str, gold_list: List[str]) -> float:
     return max(f1_candidates) if f1_candidates else 0.0
 
 
-def evaluate_em_f1(predictions: List[str], gold_answers_list: List[List[str]], dataset_name: str = 'nq') -> Tuple[float, float]:
+def evaluate_em_f1(predictions: List[str], gold_answers_list: List[List[str]], dataset_name: str = 'RAG') -> Tuple[float, float]:
     """通用批量 EM/F1 评估：支持 curatedtrec 的正则 EM 与统一 F1。"""
     assert len(predictions) == len(gold_answers_list), '预测与金标准样本数不一致'
     ems, f1s = [], []
@@ -631,7 +631,7 @@ def evaluate_em_f1(predictions: List[str], gold_answers_list: List[List[str]], d
     return float(np.mean(ems)), float(np.mean(f1s))
 
 # ===============
-# NQ EM/F1 评估
+# RAG EM/F1 评估
 # ===============
 
 # -- TruthfulQA helper functions -- # 

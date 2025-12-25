@@ -187,7 +187,7 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
     print("正在加载Llama模型...")
     
     # 使用pipeline加载模型
-    model_path = "/root/shared-nvme/RAG-llm/models/Llama-3-8B-Instruct"
+    model_path = "models/Llama-2-7b-chat-hf"
     
     # 自动选择设备 (GPU 优先)
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -222,8 +222,8 @@ def generate_new_dataset(input_file, output_file, num_samples=10, random_seed=20
                 
                 # 解析JSON数据
                 data = json.loads(line.strip())
-                query = data['query']
-                query_id_old = data['query_id']
+                query = data['question']
+                query_id_old = data['id']
                 answers = data['answers']
                 positive_passages = data['positive_passages']
                 negative_passages = data['negative_passages']

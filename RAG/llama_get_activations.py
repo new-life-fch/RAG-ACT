@@ -7,9 +7,9 @@ import sys
 sys.path.append('../')
 from llama_utils import (
     get_llama_activations_bau,
-    tokenized_nq_with_docs_dual,
-    tokenized_nq_noise_contrastive,
-    _load_nq_jsonl,
+    tokenized_dataset_with_docs_dual,
+    tokenized_dataset_noise_contrastive,
+    _load_data_jsonl,
     _build_messages_input,
     prompt_dict
 )
@@ -27,24 +27,23 @@ HF_NAMES = {
 
 def main(): 
     """
-    处理 NQ (RAG) 数据集，提取 Llama 模型的层级和头级激活特征，支持自定义输出目录
+    处理 (RAG) 数据集，提取 Llama 模型的层级和头级激活特征，支持自定义输出目录
     """
     parser = argparse.ArgumentParser()
     # 模型相关参数
     parser.add_argument('--model_name', type=str, default='llama_7B', help='基础模型名称')
     parser.add_argument('--model_prefix', type=str, default='', help='模型名称前缀')
-    # 数据集相关参数（仅支持 NQ）
-    parser.add_argument('--dataset_name', type=str, default='nq', choices=['nq'], help='数据集名称（仅支持 nq）')
-    default_nq_path = os.path.join(os.path.dirname(__file__), 'data/llama_2_chat_7b_train.jsonl')
-    parser.add_argument('--nq_jsonl', type=str, default=default_nq_path, help='NQ 格式数据集路径')
-    parser.add_argument('--nq_max_samples', type=int, default=None, help='仅处理指定数量的样本')
-    parser.add_argument('--nq_max_docs', type=int, default=None, help='每条样本使用的检索片段数量上限')
+    # 数据集相关参数
+    parser.add_argument('--dataset_name', type=str, default='nq', choices=['nq', 'triviaqa', 'popqa'], help='数据集名称')
+    parser.add_argument('--data_jsonl', type=str, default=None, help='数据集路径')
+    parser.add_argument('--data_max_samples', type=int, default=None, help='仅处理指定数量的样本')
+    parser.add_argument('--data_max_docs', type=int, default=None, help='每条样本使用的检索片段数量上限')
     parser.add_argument('--use_chat_template', action='store_true', help='使用 tokenizer.apply_chat_template 构造聊天输入')
     parser.add_argument('--use_noise_contrastive', action='store_true', help='使用 Clean vs Noisy 对比数据，用于提取抗噪方向')
     # 输出配置
     parser.add_argument('--output_dir', type=str, default='../RAG-llm/RAG/features', help='输出特征文件的目录')
     # 提取位置配置
-    parser.add_argument('--extraction_point', type=str, default='answer_end', choices=['answer_end', 'prompt_end'], 
+    parser.add_argument('--extraction_point', type=str, default='prompt_end', choices=['answer_end', 'prompt_end'], 
                         help='提取激活特征的位置：answer_end (整个序列最后) 或 prompt_end (Assistant 开始回答前)')
     # 设备配置
     parser.add_argument('--device', type=int, default=0, help='GPU 设备编号')
@@ -60,23 +59,23 @@ def main():
     )
     device = model.device  # 与模型的 device_map 保持一致
 
-    # 处理 NQ 数据集，构造 prompts 和相关元数据
+    # 处理数据集，构造 prompts 和相关元数据
     print(f"Tokenizing NQ prompts (noise_contrastive={args.use_noise_contrastive})...")
     
     if args.use_noise_contrastive:
-        prompts, labels, categories, tokens = tokenized_nq_noise_contrastive(
-            args.nq_jsonl,
+        prompts, labels, categories, tokens = tokenized_dataset_noise_contrastive(
+            args.data_jsonl,
             tokenizer,
-            max_samples=args.nq_max_samples,
-            max_docs=args.nq_max_docs,
+            max_samples=args.data_max_samples,
+            max_docs=args.data_max_docs,
             use_chat_template=args.use_chat_template,
         )
     else:
-        prompts, labels, categories, tokens = tokenized_nq_with_docs_dual(
-            args.nq_jsonl,
+        prompts, labels, categories, tokens = tokenized_dataset_with_docs_dual(
+            args.data_jsonl,
             tokenizer,
-            max_samples=args.nq_max_samples,
-            max_docs=args.nq_max_docs,
+            max_samples=args.data_max_samples,
+            max_docs=args.data_max_docs,
             use_chat_template=args.use_chat_template,
         )
 
@@ -84,7 +83,7 @@ def main():
     prompt_lengths = []
     if args.extraction_point == 'prompt_end':
         print("Calculating prompt lengths for 'prompt_end' extraction...")
-        entries = _load_nq_jsonl(args.nq_jsonl, max_samples=args.nq_max_samples)
+        entries = _load_data_jsonl(args.data_jsonl, max_samples=args.data_max_samples)
         
         for ex in entries:
             if not all(k in ex for k in ["query", "answers", "retrieve_snippets"]):
@@ -104,13 +103,13 @@ def main():
                 prompt_lengths.append(p_ids_clean.shape[-1])
                 
                 # 2. Noisy prompt length
-                docs_texts = [snip.get("text", "").strip() for snip in snippets[:args.nq_max_docs] if snip.get("text", "").strip()]
+                docs_texts = [snip.get("text", "").strip() for snip in snippets[:args.data_max_docs] if snip.get("text", "").strip()]
                 noisy_docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
                 noisy_user_prompt = prompt_dict['qa']['RAG_user'].format(paras=noisy_docs_block, question=question, answer='')
                 p_ids_noisy = _build_messages_input(tokenizer, system_prompt, noisy_user_prompt, None, args.use_chat_template)
                 prompt_lengths.append(p_ids_noisy.shape[-1])
             else:
-                docs_texts = [snip.get("text", "").strip() for snip in snippets[:args.nq_max_docs] if snip.get("text", "").strip()]
+                docs_texts = [snip.get("text", "").strip() for snip in snippets[:args.data_max_docs] if snip.get("text", "").strip()]
                 docs_block = "\n".join([f"Passage-{k+1}: {d}" for k, d in enumerate(docs_texts)])
                 system_prompt = prompt_dict['qa']['RAG_system']
                 user_prompt = prompt_dict['qa']['RAG_user'].format(paras=docs_block, question=question, answer='')

@@ -16,11 +16,11 @@ import llama
 from baukit import TraceDict
 from transformers import AutoTokenizer
 from llama_utils import (
-    _load_nq_jsonl,
+    _load_data_jsonl,
     _build_messages_input,
     get_interventions_dict,
-    evaluate_nq_em_f1,
-    get_separated_activations_nq,
+    evaluate_rag_em_f1,
+    get_separated_activations_dataset,
     get_com_directions,
 )
 from utils.prompts_templates import prompt_dict
@@ -44,7 +44,7 @@ def build_nq_generation_inputs(
     sample_size: Optional[int] = None,
     sample_seed: int = 2025,
 ) -> Tuple[List[torch.Tensor], List[List[str]]]:
-    entries = _load_nq_jsonl(jsonl_path, max_samples=max_samples)
+    entries = _load_data_jsonl(jsonl_path, max_samples=max_samples)
 
     if sample_size is not None and sample_size > 0:
         rng = np.random.RandomState(sample_seed)
@@ -111,56 +111,11 @@ def make_selection_strategies(
     by_score = sorted(scores, key=lambda x: x[2], reverse=True)
     strategies: Dict[str, List[Tuple[int, int]]] = {}
 
-    # 分数阈值
-    for thr in [0.5, 0.6, 0.7, 0.8, 0.9]:
-        strategies[f'score_ge_{thr}'] = [(l, h) for (l, h, s) in scores if s >= thr]
-
-    # 层区间（零基，右端 32 以包含第31层）
-    def clamp_end(e: int) -> int:
-        return min(e, L)
-
-    strategies['layers_0_10'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(10)]
-    strategies['layers_10_20'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(20)]
-    strategies['layers_20_31'] = [(l, h) for (l, h, s) in scores if 20 <= l < clamp_end(32)]
-    strategies['layers_10_31'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(32)]
-    strategies['layers_0_31'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(32)]
-    strategies['layers_0_5'] = [(l, h) for (l, h, s) in scores if 0 <= l < clamp_end(5)]
-    strategies['layers_5_10'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(10)]
-    strategies['layers_5_9'] = [(l, h) for (l, h, s) in scores if 5 <= l < clamp_end(9)]
-    strategies['layers_7_14'] = [(l, h) for (l, h, s) in scores if 7 <= l < clamp_end(14)]
-    strategies['layers_8_15'] = [(l, h) for (l, h, s) in scores if 8 <= l < clamp_end(15)]
-    strategies['layers_10_15'] = [(l, h) for (l, h, s) in scores if 10 <= l < clamp_end(15)]
-    strategies['layers_15_20'] = [(l, h) for (l, h, s) in scores if 15 <= l < clamp_end(20)]
-    strategies['layers_7_15'] = [(l, h) for (l, h, s) in scores if 7 <= l < clamp_end(15)]
-
-    # Top Layers from Causal Trace Experiment
-    strategies['top_k_layers_llama2_chat_7B'] = [(l, h) for (l, h, s) in scores if l in [11,2,13,15,16,12,10,8,6]]
-    # strategies['top_k_layers_llama3_8B_instruct'] = [(l, h) for (l, h, s) in scores if l in [5, 30, 20, 2, 8, 11, 26, 0, 7, 22, 24, 21, 29]]
-    strategies['top_k_layers_llama3_8B_instruct'] = [(l, h) for (l, h, s) in scores if l in [5, 30]]
-    
-
-    # 全部头
-    strategies['all_heads'] = [(l, h) for (l, h, s) in scores]
-
-    # 全局 top-k
-    for k in [6, 8, 12, 13, 24, 32, 48, 64, 96, 128, 256, 448, 512, 768, 896, 1024]:
+    # 全局 top-k，llama2_chat_7B干预35个头，vicuna-1.5-7b干预120个头
+    for k in [35,120]:
         kk = min(k, len(by_score))
         strategies[f'topk_{kk}_by_score'] = [(l, h) for (l, h, s) in by_score[:kk]]
 
-    # 分层 top-m
-    grouped: Dict[int, List[Tuple[int, int, float]]] = {l: [] for l in range(L)}
-    for (l, h, s) in scores:
-        grouped.setdefault(l, []).append((l, h, s))
-    for m in [1, 2, 4, 8, 16]:
-        sel: List[Tuple[int, int]] = []
-        for l in range(L):
-            heads_sorted = sorted(grouped.get(l, []), key=lambda x: x[2], reverse=True)
-            sel.extend([(l, h) for (_, h, _) in heads_sorted[:m]])
-        strategies[f'per_layer_top_{m}'] = sel
-
-    # 读取已保存 top heads（可选）
-    if saved_top_heads is not None:
-        strategies['saved_top_heads'] = list(saved_top_heads)
 
     return strategies
 
@@ -192,7 +147,7 @@ def run_baseline(model, tokenizer, device, inputs: List[torch.Tensor], gold_answ
             )[:, input_ids.shape[-1]:]
             gen_str = tokenizer.decode(gen_tokens[0], skip_special_tokens=True)
             preds_baseline.append(clean_answer_text(gen_str))
-    em_b, f1_b = evaluate_nq_em_f1(preds_baseline, gold_answers_list)
+    em_b, f1_b = evaluate_rag_em_f1(preds_baseline, gold_answers_list)
     return preds_baseline, {"EM": em_b, "F1": f1_b}
 
 
@@ -215,7 +170,6 @@ def run_intervention(
     timeout_minutes: Optional[float] = None,
     alpha_per_layer: Optional[Dict[int, float]] = None,
     com_directions: Optional[np.ndarray] = None,
-    pf_gamma: float = 1.0,
 ) -> Tuple[List[str], Dict[str, float]]:
     B, L, HD = tuning_headwise.shape
     if num_heads is None:
@@ -255,12 +209,10 @@ def run_intervention(
                 alpha_cur = alpha_per_layer[layer_idx]
             proj_mult = proj_val_std
             reliability = float(probe_factor)
-            strength_base = alpha_cur * proj_mult * (reliability ** pf_gamma)
+            strength_base = alpha_cur * proj_mult * reliability
             if start_idx == -1:
-                # h_out[:, -1, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
                 h_out[:, -1, head, :] += strength_base * direction_to_add
             else:
-                # h_out[:, start_idx:, head, :] += (strength_base * (1.0 - dynamic_score)).unsqueeze(-1) * direction_to_add
                 h_out[:, start_idx:, head, :] += strength_base * direction_to_add
         return rearrange(h_out, 'b s h d -> b s (h d)')
 
@@ -293,7 +245,7 @@ def run_intervention(
 
     if timed_out:
         subset_golds = gold_answers_list[:len(preds)]
-        em_i, f1_i = evaluate_nq_em_f1(preds, subset_golds) if len(preds) else (0.0, 0.0)
+        em_i, f1_i = evaluate_rag_em_f1(preds, subset_golds) if len(preds) else (0.0, 0.0)
         return preds, {
             "EM": float(em_i),
             "F1": float(f1_i),
@@ -302,7 +254,7 @@ def run_intervention(
             "elapsed_min": (time.time() - start_time) / 60.0,
         }
     else:
-        em_i, f1_i = evaluate_nq_em_f1(preds, gold_answers_list)
+        em_i, f1_i = evaluate_rag_em_f1(preds, gold_answers_list)
         return preds, {
             "EM": float(em_i),
             "F1": float(f1_i),
@@ -353,19 +305,18 @@ def main():
     parser.add_argument('--scores_csv', type=str, required=True)
     parser.add_argument('--saved_top_heads_path', type=str, default=None)
     parser.add_argument('--max_new_tokens', type=int, default=256)
-    parser.add_argument('--results_root', type=str, default='./RAG/results_dump/llama-2-7b-instruct-unified')
-    parser.add_argument('--pf_gamma', type=float, default=1.0)
+    parser.add_argument('--results_root', type=str, default='./RAG/results/llama-2-7b-instruct-unified')
 
     # 选择策略与过滤
     parser.add_argument('--include_strategies', type=str, default=None,
-                        help='逗号分隔的策略白名单，例如: layers_10_31,score_ge_0.7,topk_256_by_score,per_layer_top_4,saved_top_heads')
+                        help='逗号分隔的策略白名单，例如: topk_35_by_score')
     parser.add_argument('--limit_per_strategy', type=int, default=None,
                         help='每个策略最多选择的头数量；超过则按 CSV 分数降序截断')
 
     # 强度与乘因子
     parser.add_argument('--alphas', type=str, default='range:1:19:2',
                         help='干预强度列表或范围：逗号列表或 range:start:stop:step')
-    parser.add_argument('--probe_factor_modes', type=str, default='both', choices=['both','true','false'],
+    parser.add_argument('--probe_factor_modes', type=str, default='false', choices=['both','true','false'],
                         help='是否乘探针分数：both/true/false')
 
     parser.add_argument('--timeout_minutes', type=float, default=4.0,
@@ -400,25 +351,25 @@ def main():
         args.dataset_path, tokenizer, max_samples=None, max_docs=args.max_docs,
         use_chat_template=args.use_chat_template, sample_size=args.sample_size, sample_seed=args.sample_seed,
     )
-##--------------------------------------------
+##---------------------暂时不跑baseline-----------------------
 
-    # 先跑一次 baseline
-    baseline_ans, baseline_sum = run_baseline(model, tokenizer, device, inputs, gold_answers_list, args.max_new_tokens)
-    baseline_sum.update({"alpha": 0.0, "model_name": args.model_name, "intervention": "none", "sample_size": args.sample_size})
-    baseline_ans_path = os.path.join(ans_dir, 'nq_hparam_unified_baseline_answers.jsonl')
-    baseline_sum_path = os.path.join(sum_dir, 'nq_hparam_unified_baseline_summary.json')
-    with open(baseline_ans_path, 'w', encoding='utf-8') as f:
-        for pred, golds in zip(baseline_ans, gold_answers_list):
-            f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
-    with open(baseline_sum_path, 'w', encoding='utf-8') as f:
-        json.dump(baseline_sum, f, ensure_ascii=False, indent=2)
+    # # 先跑一次 baseline
+    # baseline_ans, baseline_sum = run_baseline(model, tokenizer, device, inputs, gold_answers_list, args.max_new_tokens)
+    # baseline_sum.update({"alpha": 0.0, "model_name": args.model_name, "intervention": "none", "sample_size": args.sample_size})
+    # baseline_ans_path = os.path.join(ans_dir, 'nq_hparam_unified_baseline_answers.jsonl')
+    # baseline_sum_path = os.path.join(sum_dir, 'nq_hparam_unified_baseline_summary.json')
+    # with open(baseline_ans_path, 'w', encoding='utf-8') as f:
+    #     for pred, golds in zip(baseline_ans, gold_answers_list):
+    #         f.write(json.dumps({"prediction": pred, "gold_answers": golds}, ensure_ascii=False) + '\n')
+    # with open(baseline_sum_path, 'w', encoding='utf-8') as f:
+    #     json.dump(baseline_sum, f, ensure_ascii=False, indent=2)
 
-    print(
-        f"[Baseline] samples={args.sample_size} EM={baseline_sum['EM']:.4f} "
-        f"F1={baseline_sum['F1']:.4f} ΔEM={0.0:+.4f} ΔF1={0.0:+.4f}"
-    )
+    # print(
+    #     f"[Baseline] samples={args.sample_size} EM={baseline_sum['EM']:.4f} "
+    #     f"F1={baseline_sum['F1']:.4f} ΔEM={0.0:+.4f} ΔF1={0.0:+.4f}"
+    # )
 
-##--------------------------------------------
+##---------------------暂时不跑baseline-----------------------
     # 加载探针、分数与调强度激活
     with open(args.probes_path, 'rb') as f:
         probes = pickle.load(f)
@@ -439,7 +390,7 @@ def main():
         
     tuning_sep = rearrange(tuning_headwise, 'b l (h d) -> b l h d', h=num_heads_calc, d=args.head_dim)
     num_questions = B_th // 2
-    separated_head, separated_labels, _ = get_separated_activations_nq(tuning_labels, tuning_sep, num_questions)
+    separated_head, separated_labels, _ = get_separated_activations_dataset(tuning_labels, tuning_sep, num_questions)
     train_set_idxs = np.arange(num_questions)
     val_set_idxs = np.array([], dtype=int)
     com_directions = get_com_directions(L_th, num_heads_calc, train_set_idxs, val_set_idxs, separated_head, separated_labels)
@@ -493,7 +444,7 @@ def main():
                     float(alpha), sel_name, unique_heads, probes, tuning_headwise,
                     args.head_dim, args.num_heads, use_pf, 
                     val_accs, args.max_new_tokens, args.timeout_minutes, None,
-                    com_directions=com_directions, pf_gamma=args.pf_gamma,
+                    com_directions=com_directions,
                 )
 
                 ans_path = os.path.join(ans_dir, f"nq_unified_{sel_name}_alpha{alpha}_pf{int(use_pf)}_answers.jsonl")
@@ -512,17 +463,18 @@ def main():
                 }
                 with open(sum_path, 'w', encoding='utf-8') as f:
                     json.dump(out_summary, f, ensure_ascii=False, indent=2)
-##--------------------------------------------
+##---------------------暂时不跑baseline-----------------------
 
-                d_em = out_summary["EM"] - baseline_sum["EM"]
-                d_f1 = out_summary["F1"] - baseline_sum["F1"]
-##--------------------------------------------
+                # d_em = out_summary["EM"] - baseline_sum["EM"]
+                # d_f1 = out_summary["F1"] - baseline_sum["F1"]
+##---------------------暂时不跑baseline-----------------------
                 status = "TIMED_OUT" if out_summary["timed_out"] else "OK"
                 print((
                     f"[Intervene:{status}] strategy={sel_name} heads={k_count} alpha={alpha} pf={int(use_pf)} "
-##--------------------------------------------
-                    f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
-##--------------------------------------------
+##---------------------暂时不跑baseline-----------------------
+                    # f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} ΔEM={d_em:+.4f} ΔF1={d_f1:+.4f} "
+##---------------------暂时不跑baseline-----------------------
+                    f"EM={out_summary['EM']:.4f} F1={out_summary['F1']:.4f} "
                     f"completed={out_summary['num_completed']}/{args.sample_size} elapsed={out_summary['elapsed_min']:.2f}m"
                 ))
 
@@ -536,9 +488,9 @@ def main():
         f.write('selection,num_heads,alpha/use_map,use_probe_factor,EM,F1\n')
         for row in summary_rows_sorted:
             f.write(','.join(map(str, row)) + '\n')
-##--------------------------------------------
-    print(f"Baseline summary saved to: {baseline_sum_path}")
-##--------------------------------------------
+##---------------------暂时不跑baseline-----------------------
+    # print(f"Baseline summary saved to: {baseline_sum_path}")
+##---------------------暂时不跑baseline-----------------------
     print(f"All run summaries saved under: {sum_dir}")
     print(f"Final hyperparam summary: {final_csv}")
 

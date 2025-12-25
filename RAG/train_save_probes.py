@@ -7,7 +7,7 @@ import pickle
 import sys
 sys.path.append('./RAG')
 from llama_utils import (
-    get_separated_activations_nq,
+    get_separated_activations_dataset,
     train_probes,
     flattened_idx_to_layer_head,
     layer_head_to_flattened_idx,
@@ -19,10 +19,10 @@ def main():
     """
     训练并筛选前 top-k 个探针，并保存到磁盘，便于后续实验复用。
 
-    使用从 NQ 数据集生成的特征（路径可通过 --feat_dir 指定）：
-    - `{feat_dir}/{model_name}_nq_labels.npy`
-    - `{feat_dir}/{model_name}_nq_head_wise.npy`
-    - `{feat_dir}/{model_name}_nq_tokens.pkl`（可选，分析定位用）
+    使用从数据集生成的特征（路径可通过 --feat_dir 指定）：
+    - `{feat_dir}/{model_name}_{dataset_name}_labels.npy`
+    - `{feat_dir}/{model_name}_{dataset_name}_head_wise.npy`
+    - `{feat_dir}/{model_name}_{dataset_name}_tokens.pkl`（可选，分析定位用）
 
     处理流程：
     1. 加载 head-wise 激活并 reshape 为 `(B, L, H, D)`；
@@ -42,6 +42,7 @@ def main():
     parser.add_argument('--seed', type=int, default=2025, help='随机种子')
     parser.add_argument('--val_ratio', type=float, default=0.2, help='验证集比例')
     parser.add_argument('--num_fold', type=int, default=3, help='可选：K折交叉验证的折数，>1时启用；=1时仅随机划分')
+    parser.add_argument('--dataset_name', type=str, default='nq', choices=['nq', 'triviaqa', 'popqa'], help='数据集名称')
     parser.add_argument(
         '--cv_final_train',
         type=str,
@@ -53,18 +54,18 @@ def main():
     parser.add_argument('--feat_dir', type=str, default='../RAG-llm/RAG/features', 
                         help='特征文件所在的输入文件夹路径（默认：../RAG-llm/RAG/features）')
     # 新增：输出结果文件夹参数
-    parser.add_argument('--save_dir', type=str, default='../RAG-llm/RAG/results_dump/probes',
-                        help='探针及结果保存的输出文件夹路径（默认：../RAG-llm/RAG/results_dump/probes）')
+    parser.add_argument('--save_dir', type=str, default='../RAG-llm/RAG/results/probes',
+                        help='探针及结果保存的输出文件夹路径（默认：../RAG-llm/RAG/results/probes）')
     args = parser.parse_args()
 
     np.random.seed(args.seed)
 
     # 路径准备（使用参数指定的文件夹）
-    labels_path = os.path.join(args.feat_dir, f'{args.model_name}_nq_labels.npy')
-    head_path = os.path.join(args.feat_dir, f'{args.model_name}_nq_head_wise.npy')
+    labels_path = os.path.join(args.feat_dir, f'{args.model_name}_{args.dataset_name}_labels.npy')
+    head_path = os.path.join(args.feat_dir, f'{args.model_name}_{args.dataset_name}_head_wise.npy')
 
     if not (os.path.exists(labels_path) and os.path.exists(head_path)):
-        raise FileNotFoundError(f'未找到 NQ 特征文件，请先运行 RAG/llama_get_activations.py --dataset_name nq 收集特征，或检查 --feat_dir 参数是否正确。缺失文件：\n- {labels_path}\n- {head_path}')
+        raise FileNotFoundError(f'未找到 {args.dataset_name} 特征文件，请先运行 RAG/llama_get_activations.py --dataset_name {args.dataset_name} 收集特征，或检查 --feat_dir 参数是否正确。缺失文件：\n- {labels_path}\n- {head_path}')
 
     labels = np.load(labels_path)
     head_wise = np.load(head_path)
@@ -80,13 +81,13 @@ def main():
 
     head_wise = rearrange(head_wise, 'b l (h d) -> b l h d', h=num_heads, d=args.head_dim)
 
-    # NQ：每题两个样本（正确/错误），问题数 = B / 2
+    # 数据集：每题两个样本（正确/错误），问题数 = B / 2
     if B % 2 != 0:
-        raise ValueError('样本数不是偶数，无法按 NQ 规则每题两样本拆分')
+        raise ValueError('样本数不是偶数，无法按数据集规则每题两样本拆分')
     num_questions = B // 2
 
     # 按题拆分（用于探针训练）
-    separated_head, separated_labels, split_idxs = get_separated_activations_nq(labels, head_wise, num_questions)
+    separated_head, separated_labels, split_idxs = get_separated_activations_dataset(labels, head_wise, num_questions)
 
     # 支持 K折交叉验证或单次划分
     if args.num_fold and args.num_fold > 1:
@@ -145,7 +146,7 @@ def main():
 
     # 保存探针与 top-k 结果（使用参数指定的输出文件夹）
     os.makedirs(args.save_dir, exist_ok=True)
-    base = f'{args.model_name}_nq_seed_{args.seed}_top_{args.top_k}'
+    base = f'{args.model_name}_{args.dataset_name}_seed_{args.seed}_top_{args.top_k}'
     if args.num_fold and args.num_fold > 1:
         base += f'_folds_{args.num_fold}'
     probes_path = os.path.join(args.save_dir, base + '_probes.pkl')

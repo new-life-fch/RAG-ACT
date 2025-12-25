@@ -8,11 +8,8 @@
 - random：按随机种子采样（先采训练集，再从剩余采验证集，最后从剩余采测试集）
 
 示例：
-python RAG/utils/3_extract_remaining_testset_popqa.py \
-    --input RAG/data/NQ/nq-dev-train.jsonl \
-    --val-output RAG/data/NQ/val.jsonl \
-    --test-output RAG/data/NQ/test.jsonl \
-    --train-num 1500 --val-num 1000 --test-num 2000 --method random --seed 2025
+`python RAG/utils/3_extract_remaining_testset.py --input RAG/data/PopQA/PopQA_processed.jsonl --val-output RAG/data/PopQA/val_noise_test.jsonl --test-output RAG/data/PopQA/test_noise_test.jsonl --train-num 0 --val-num 0 --test-num 1190 --method random --seed 2025 --noise-levels 0,1,2,3,4,5`
+
 """
 
 import argparse
@@ -126,8 +123,8 @@ def process_entries(lines, indices, seed):
 
         # 组装输出条目：保留必要字段与检索片段
         entry = {
-            "query_id": data.get("id"),
-            "query": data.get("question"),
+            "query_id": data.get("query_id"),
+            "query": data.get("query"),
             "answers": data.get("answers"),
             "retrieve_snippets": retrieve_snippets,
         }
@@ -154,8 +151,8 @@ def process_entries_with_noise(lines, indices, seed, noise_count):
         negative_passages = data.get("negative_passages", [])
         retrieve_snippets = select_passages_with_noise(positive_passages, negative_passages, noise_count, total=5, random_seed=seed)
         entry = {
-            "query_id": data.get("id"),
-            "query": data.get("question"),
+            "query_id": data.get("query_id"),
+            "query": data.get("query"),
             "answers": data.get("answers"),
             "retrieve_snippets": retrieve_snippets,
         }

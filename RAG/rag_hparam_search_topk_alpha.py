@@ -16,11 +16,11 @@ import llama
 from baukit import TraceDict
 from transformers import AutoTokenizer
 from llama_utils import (
-    _load_nq_jsonl,
+    _load_data_jsonl,
     _build_messages_input,
     get_interventions_dict,
-    evaluate_nq_em_f1,
-    get_separated_activations_nq,
+    evaluate_rag_em_f1,
+    get_separated_activations_dataset,
     get_com_directions,
 )
 from utils.prompts_templates import prompt_dict
@@ -44,7 +44,7 @@ def build_nq_generation_inputs(
     sample_size: Optional[int] = None,
     sample_seed: int = 2025,
 ) -> Tuple[List[torch.Tensor], List[List[str]]]:
-    entries = _load_nq_jsonl(jsonl_path, max_samples=max_samples)
+    entries = _load_data_jsonl(jsonl_path, max_samples=max_samples)
 
     if sample_size is not None and sample_size > 0:
         rng = np.random.RandomState(sample_seed)
@@ -129,7 +129,7 @@ def run_baseline(model, tokenizer, device, inputs: List[torch.Tensor], gold_answ
             )[:, input_ids.shape[-1]:]
             gen_str = tokenizer.decode(gen_tokens[0], skip_special_tokens=True)
             preds_baseline.append(clean_answer_text(gen_str))
-    em_b, f1_b = evaluate_nq_em_f1(preds_baseline, gold_answers_list)
+    em_b, f1_b = evaluate_rag_em_f1(preds_baseline, gold_answers_list)
     return preds_baseline, {"EM": em_b, "F1": f1_b}
 
 
@@ -152,7 +152,6 @@ def run_intervention(
     timeout_minutes: Optional[float] = None,
     alpha_per_layer: Optional[Dict[int, float]] = None,
     com_directions: Optional[np.ndarray] = None,
-    pf_gamma: float = 1.0,
 ) -> Tuple[List[str], Dict[str, float]]:
     B, L, HD = tuning_headwise.shape
     if num_heads is None:
@@ -192,7 +191,7 @@ def run_intervention(
                 alpha_cur = alpha_per_layer[layer_idx]
             proj_mult = proj_val_std
             reliability = float(probe_factor)
-            strength_base = alpha_cur * proj_mult * (reliability ** pf_gamma)
+            strength_base = alpha_cur * proj_mult * reliability
             if start_idx == -1:
                 h_out[:, -1, head, :] += strength_base * direction_to_add
             else:
@@ -227,7 +226,7 @@ def run_intervention(
 
     if timed_out:
         subset_golds = gold_answers_list[:len(preds)]
-        em_i, f1_i = evaluate_nq_em_f1(preds, subset_golds) if len(preds) else (0.0, 0.0)
+        em_i, f1_i = evaluate_rag_em_f1(preds, subset_golds) if len(preds) else (0.0, 0.0)
         return preds, {
             "EM": float(em_i),
             "F1": float(f1_i),
@@ -236,7 +235,7 @@ def run_intervention(
             "elapsed_min": (time.time() - start_time) / 60.0,
         }
     else:
-        em_i, f1_i = evaluate_nq_em_f1(preds, gold_answers_list)
+        em_i, f1_i = evaluate_rag_em_f1(preds, gold_answers_list)
         return preds, {
             "EM": float(em_i),
             "F1": float(f1_i),
@@ -262,9 +261,8 @@ def main():
     parser.add_argument('--tuning_labels_path', type=str, default='./RAG/features/llama2_chat_7B_nq_labels.npy')
     parser.add_argument('--scores_csv', type=str, required=True)
     parser.add_argument('--max_new_tokens', type=int, default=256)
-    parser.add_argument('--results_root', type=str, default='./RAG/results_dump/llama-2-7b-instruct-topk-alpha')
-    parser.add_argument('--pf_gamma', type=float, default=1.0)
-    parser.add_argument('--timeout_minutes', type=float, default=1.5)
+    parser.add_argument('--results_root', type=str, default='./RAG/results/llama-2-7b-instruct-topk-alpha')
+    parser.add_argument('--timeout_minutes', type=float, default=10)
     parser.add_argument('--skip_if_exists', action='store_true')
     
     args = parser.parse_args()
@@ -273,19 +271,17 @@ def main():
     # 1. 定义超参数网格 (Reasonable Grids)
     # ---------------------------------------------------------
     # Top-K: 从小到大，覆盖主要区间
-    top_k_grid = [8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 448, 512, 640, 768, 896, 1024]
-    # top_k_grid = [448, 512, 640, 768, 896, 1024]
-    # top_k_grid = [12]
+    # top_k_grid = [1, 19, 30, 39, 50, 62, 71, 87, 100, 120, 136] #vicuna
+    # top_k_grid = [2, 15, 28, 35, 43, 57, 69, 92, 106, 131, 154] #llama2
+    top_k_grid = [5,12,20,32,47,60,84,112,133,154,173] #llama3
+
     
-    # Alpha: 覆盖弱到强 (0.1 ~ 30)
-    alpha_grid = [5,7,9,11,13]
-    # alpha_grid = [39,40,41,55,60,65,70]
-    # alpha_grid = [1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35]
+    # Alpha: 覆盖弱到强 (3 ~ 9)
+    alpha_grid = [3,5,7,9]
+
     
-    # Probe Factor Mode: 为了控制变量，这里固定为 False (不乘探针准确率) 或者 True
+    # Probe Factor Mode: 为了控制变量，这里固定为 False (不乘探针准确率) 
     # 如果要对比，可以设为 [False] 或 [True]。这里默认设为 False (纯强度控制)
-    # 但一般 ITI 推荐用 True。鉴于用户只问了 Top-K 和 Alpha，我们固定用 False (Uniform) 以纯粹测试 Alpha 效果，
-    # 或者为了效果更好，固定 True。
     # 这里我们选择 False (不乘 Probe Factor)，让 Alpha 成为唯一的缩放因子。
     use_probe_factors = [False] 
 
@@ -357,7 +353,7 @@ def main():
     
     tuning_sep = rearrange(tuning_headwise, 'b l (h d) -> b l h d', h=num_heads_calc, d=args.head_dim)
     num_questions = B_th // 2
-    separated_head, separated_labels, _ = get_separated_activations_nq(tuning_labels, tuning_sep, num_questions)
+    separated_head, separated_labels, _ = get_separated_activations_dataset(tuning_labels, tuning_sep, num_questions)
     train_set_idxs = np.arange(num_questions)
     val_set_idxs = np.array([], dtype=int)
     com_directions = get_com_directions(L_th, num_heads_calc, train_set_idxs, val_set_idxs, separated_head, separated_labels)
@@ -386,7 +382,7 @@ def main():
                     float(alpha), sel_name, sel_heads, probes, tuning_headwise,
                     args.head_dim, args.num_heads, use_pf, 
                     val_accs, args.max_new_tokens, args.timeout_minutes, None,
-                    com_directions=com_directions, pf_gamma=args.pf_gamma,
+                    com_directions=com_directions,
                 )
 
                 ans_path = os.path.join(ans_dir, f"{sel_name}_alpha{alpha}_pf{int(use_pf)}_answers.jsonl")

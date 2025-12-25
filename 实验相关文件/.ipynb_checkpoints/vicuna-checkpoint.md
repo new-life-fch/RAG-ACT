@@ -214,9 +214,6 @@ python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/NQ/tes
 ```bash
 python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/TriviaQA/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/vicuna_7B_v1.5-triviaqa-user/CON_300
 ```
-```bash
-python RAG/con_rag.py --model_name vicuna_7B_v1.5 --dataset_path RAG/data/PopQA/test_noise_test_noise4.jsonl --use_chat_template --max_docs 5 --sample_size 300 --max_new_tokens 256 --results_root RAG/results/vicuna_7B_v1.5-popqa-user/CON_300
-```
 
 ## naive LLM
 - 示例命令：

@@ -10,9 +10,9 @@ from tqdm import tqdm
 import llama
 from transformers import AutoTokenizer
 from llama_utils import (
-    _load_nq_jsonl,
+    _load_data_jsonl,
     _build_messages_input,
-    evaluate_nq_em_f1,
+    evaluate_rag_em_f1,
 )
 from utils.prompts_templates import prompt_dict
 
@@ -34,7 +34,7 @@ def build_nq_con_notes_inputs(
     sample_size: Optional[int] = None,
     sample_seed: int = 2025,
 ) -> Tuple[List[torch.Tensor], List[List[str]], List[Tuple[str, str]]]:
-    entries = _load_nq_jsonl(jsonl_path, max_samples=max_samples)
+    entries = _load_data_jsonl(jsonl_path, max_samples=max_samples)
 
     if sample_size is not None and sample_size > 0:
         rng = np.random.RandomState(sample_seed)
@@ -144,12 +144,15 @@ def main():
     for (docs_block, question), notes in zip(metas, notes_texts):
         system_prompt = prompt_dict['qa']['CoN_answer_system']
         user_prompt = prompt_dict['qa']['CoN_answer_user'].format(passages=docs_block, notes=notes, question=question)
+        # system_prompt = prompt_dict['qa']['CoN_answer_system_only_notes']
+        # user_prompt = prompt_dict['qa']['CoN_answer_user_only_notes'].format(notes=notes, question=question)
+
         input_ids = _build_messages_input(tokenizer, system_prompt, user_prompt, assistant_content=None, use_chat_template=args.use_chat_template)
         answer_inputs.append(input_ids)
 
     raw_answers = run_generate_texts(model, tokenizer, device, answer_inputs, args.max_new_tokens, desc='con_answer_generate')
     baseline_ans = [clean_answer_text(s) for s in raw_answers]
-    em_b, f1_b = evaluate_nq_em_f1(baseline_ans, gold_answers_list)
+    em_b, f1_b = evaluate_rag_em_f1(baseline_ans, gold_answers_list)
     baseline_sum = {"EM": em_b, "F1": f1_b, "alpha": 0.0, "model_name": args.model_name, "intervention": "none", "sample_size": args.sample_size, "prompt": "CoN_two_stage"}
 
     baseline_ans_path = os.path.join(ans_dir, 'nq_con_two_stage_answers.jsonl')
